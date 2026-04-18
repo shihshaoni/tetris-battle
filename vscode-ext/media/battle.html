@@ -234,6 +234,7 @@
         <div class="stat-val" id="gameTime" style="font-size:12px">00:00</div>
       </div>
       <button class="btn btn-secondary btn-small" onclick="surrenderGame()" style="margin-top:8px;width:100%">QUIT</button>
+      <button class="btn btn-secondary btn-small" id="muteBtn" onclick="toggleMute()" style="margin-top:4px;width:100%">🔊</button>
     </div>
 
     <!-- Opponent board -->
@@ -271,6 +272,123 @@
 const SERVER_URL = '__SERVER_URL__';
 const DEFAULT_NAME = '__PLAYER_NAME__';
 document.getElementById('nameInput').value = DEFAULT_NAME;
+
+// ═══════════════════════════════════════════
+//  AUDIO ENGINE
+// ═══════════════════════════════════════════
+let audioCtx = null, musicGain = null, sfxGain = null;
+let musicTimer = null, musicIdx = 0, musicNext = 0, musicMuted = false;
+
+const FR = {
+  E5:659.25,D5:587.33,C5:523.25,B4:493.88,A4:440.00,
+  F5:698.46,G5:783.99,A5:880.00
+};
+const BPM=150, B=60/BPM;
+
+// Tetris Theme A (Korobeiniki)
+const MELODY=[
+  [FR.E5,1],[FR.B4,.5],[FR.C5,.5],[FR.D5,1],[FR.C5,.5],[FR.B4,.5],
+  [FR.A4,1],[FR.A4,.5],[FR.C5,.5],[FR.E5,1],[FR.D5,.5],[FR.C5,.5],
+  [FR.B4,1.5],[FR.C5,.5],[FR.D5,1],[FR.E5,1],
+  [FR.C5,1],[FR.A4,1],[0,2],
+  [FR.D5,1],[FR.F5,.5],[FR.A5,1.5],[FR.G5,.5],[FR.F5,.5],
+  [FR.E5,1.5],[FR.C5,.5],[FR.E5,1],[FR.D5,.5],[FR.C5,.5],
+  [FR.B4,1],[FR.B4,.5],[FR.C5,.5],[FR.D5,1],[FR.E5,1],
+  [FR.C5,1],[FR.A4,1],[0,2],
+];
+
+function initAudio(){
+  if(audioCtx)return;
+  audioCtx=new(window.AudioContext||window.webkitAudioContext)();
+  musicGain=audioCtx.createGain(); musicGain.gain.value=0.12; musicGain.connect(audioCtx.destination);
+  sfxGain=audioCtx.createGain(); sfxGain.gain.value=0.4; sfxGain.connect(audioCtx.destination);
+}
+
+function note(freq,start,dur,dst,type='square'){
+  if(!audioCtx||!dst||freq===0)return;
+  const o=audioCtx.createOscillator(),e=audioCtx.createGain();
+  o.type=type; o.frequency.value=freq;
+  o.connect(e); e.connect(dst);
+  e.gain.setValueAtTime(1,start);
+  e.gain.exponentialRampToValueAtTime(0.001,start+dur*0.9);
+  o.start(start); o.stop(start+dur);
+}
+
+function scheduleMelody(){
+  if(!audioCtx||musicMuted)return;
+  while(musicNext<audioCtx.currentTime+0.15){
+    const[freq,beats]=MELODY[musicIdx];
+    note(freq,musicNext,beats*B*0.92,musicGain,'square');
+    musicNext+=beats*B;
+    musicIdx=(musicIdx+1)%MELODY.length;
+  }
+}
+
+function startMusic(){
+  initAudio();
+  if(musicTimer)return;
+  musicIdx=0; musicNext=audioCtx.currentTime+0.05;
+  scheduleMelody();
+  musicTimer=setInterval(scheduleMelody,50);
+}
+
+function stopMusic(){
+  if(musicTimer){clearInterval(musicTimer);musicTimer=null;}
+}
+
+function toggleMute(){
+  musicMuted=!musicMuted;
+  if(musicGain)musicGain.gain.value=musicMuted?0:0.12;
+  if(sfxGain)sfxGain.gain.value=musicMuted?0:0.4;
+  document.getElementById('muteBtn').textContent=musicMuted?'🔇':'🔊';
+}
+
+// Sound effects
+function sfxLock(){
+  if(!audioCtx||musicMuted)return;
+  const t=audioCtx.currentTime;
+  const o=audioCtx.createOscillator(),e=audioCtx.createGain();
+  o.type='square'; o.connect(e); e.connect(sfxGain);
+  o.frequency.setValueAtTime(200,t); o.frequency.exponentialRampToValueAtTime(80,t+0.08);
+  e.gain.setValueAtTime(0.6,t); e.gain.exponentialRampToValueAtTime(0.001,t+0.1);
+  o.start(t); o.stop(t+0.1);
+}
+
+function sfxClear(lines){
+  if(!audioCtx||musicMuted)return;
+  const t=audioCtx.currentTime;
+  const s=[523,659,784,1047];
+  s.slice(0,lines).forEach((f,i)=>note(f,t+i*0.07,0.15,sfxGain,'sine'));
+  if(lines===4){note(1047,t+0.3,0.15,sfxGain,'sine');note(1319,t+0.46,0.25,sfxGain,'sine');}
+}
+
+function sfxAttackSnd(){
+  if(!audioCtx||musicMuted)return;
+  const t=audioCtx.currentTime;
+  note(880,t,0.05,sfxGain,'sawtooth'); note(1109,t+0.06,0.05,sfxGain,'sawtooth');
+}
+
+function sfxGarbageSnd(){
+  if(!audioCtx||musicMuted)return;
+  const t=audioCtx.currentTime;
+  note(220,t,0.04,sfxGain,'sawtooth'); note(150,t+0.05,0.1,sfxGain,'sawtooth');
+}
+
+function sfxHardDrop(){
+  if(!audioCtx||musicMuted)return;
+  const t=audioCtx.currentTime;
+  note(400,t,0.03,sfxGain,'square'); note(250,t+0.03,0.05,sfxGain,'square');
+}
+
+function sfxEnd(win){
+  if(!audioCtx)return;
+  const t=audioCtx.currentTime;
+  if(win){
+    [523,659,784,1047,1319].forEach((f,i)=>note(f,t+i*0.1,0.15,sfxGain,'sine'));
+  } else {
+    [440,415,392,370,349,330].forEach((f,i)=>note(f,t+i*0.12,0.18,sfxGain,'square'));
+  }
+}
 
 // ═══════════════════════════════════════════
 //  NETWORK
@@ -334,12 +452,14 @@ function showPrivate() {
 }
 
 function joinRandom() {
+  initAudio();
   const name = document.getElementById('nameInput').value.trim() || DEFAULT_NAME;
   setStatus('正在搜尋對手...');
   wsConnect(() => wsSend('join', { name }));
 }
 
 function joinRoom() {
+  initAudio();
   const name = document.getElementById('nameInput').value.trim() || DEFAULT_NAME;
   const roomId = document.getElementById('roomInput').value.trim().toUpperCase();
   if (!roomId) return;
@@ -348,6 +468,7 @@ function joinRoom() {
 }
 
 function createRoom() {
+  initAudio();
   const name = document.getElementById('nameInput').value.trim() || DEFAULT_NAME;
   // Generate a room code client-side for display
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -391,10 +512,12 @@ function handleServerMsg(msg) {
       receiveGarbage(msg.data.lines);
       break;
     case 'you_win':
-      showResult(true);
+      showResult(true, '對手方塊觸頂！');
       break;
     case 'you_lose':
-      showResult(false);
+      // already shown locally; just ensure overlay is visible
+      if (!document.getElementById('resultOverlay').classList.contains('visible'))
+        showResult(false, '方塊觸頂！');
       break;
     case 'opponent_left':
       if (gameActive) showResult(true, '對手已離線');
@@ -431,6 +554,7 @@ let gameActive = false;
 let pendingGarbage = 0;
 let gameStartMs = 0;
 let syncTimer = 0;
+let opSc = 0, opLi = 0;
 
 function rb(){const k=Object.keys(SH);for(let i=k.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[k[i],k[j]]=[k[j],k[i]];}return k;}
 function np2(){if(!bag.length)bag=rb();return bag.pop();}
@@ -451,12 +575,20 @@ function tryR(d){
 function gy2(){let y=pc.y;while(!col(pc.cells,pc.x,y+1))y++;return y;}
 
 function lockPc(){
+  let topOut = false;
   pc.cells.forEach(([cx,cy])=>{
     const nx=cx+pc.x,ny=cy+pc.y;
+    if(ny <= 0) topOut = true;
     if(ny>=0&&ny<ROWS&&nx>=0&&nx<COLS)grid[ny][nx]=pc.type;
   });
+  sfxLock();
   clr();
-  // Apply pending garbage AFTER clearing
+  if(topOut){
+    gameActive=false;
+    wsSend('game_over',{});
+    showResult(false,'方塊觸頂！');
+    return;
+  }
   applyGarbage();
   spn();
 }
@@ -473,16 +605,17 @@ function clr(){
     di=Math.max(50,1000-(lv-1)*80);
 
     // Send attack! Garbage lines = cleared - 1 (single=0, double=1, triple=2, tetris=3)
+    sfxClear(c);
     const attackLines = c - 1;
     if(attackLines > 0){
-      // If we have pending garbage, cancel some first
       if(pendingGarbage > 0){
         const cancel = Math.min(pendingGarbage, attackLines);
         pendingGarbage -= cancel;
         const remaining = attackLines - cancel;
-        if(remaining > 0) wsSend('attack', {lines: remaining});
+        if(remaining > 0){wsSend('attack', {lines: remaining});sfxAttackSnd();}
       } else {
         wsSend('attack', {lines: attackLines});
+        sfxAttackSnd();
       }
       flashAttack(attackLines);
     }
@@ -493,12 +626,14 @@ function clr(){
 
 function spn(){
   pc=cp(nq.shift());nq.push(np2());ch=true;lkT=0;lkM=0;
-  if(col(pc.cells,pc.x,pc.y)){
+  drawMyNext();drawMyHold();
+  // Block-out: piece can't fit at top of visible grid
+  if(col(pc.cells,pc.x,0)){
     gameActive=false;
     wsSend('game_over',{});
-    showResult(false,'方塊堆滿了！');
+    showResult(false,'方塊觸頂！');
+    return;
   }
-  drawMyNext();drawMyHold();
 }
 
 function holdSw(){
@@ -510,6 +645,7 @@ function holdSw(){
 // ── Garbage lines ──
 function receiveGarbage(n) {
   pendingGarbage += n;
+  sfxGarbageSnd();
   updateGarbageBar();
 }
 
@@ -597,8 +733,9 @@ function updateOpponentBoard(data){
       if(v)dc2(opCx,x,y,v,OP_SZ);
     }
   }
-  document.getElementById('opScore').textContent=data.score||0;
-  document.getElementById('opLines').textContent=data.lines||0;
+  opSc=data.score||0;opLi=data.lines||0;
+  document.getElementById('opScore').textContent=opSc;
+  document.getElementById('opLines').textContent=opLi;
 }
 
 // ── Sync my board state to opponent ──
@@ -615,7 +752,7 @@ function handleKey(e){
     case'ArrowDown':if(!col(pc.cells,pc.x,pc.y+1)){pc.y++;sc+=1;dt2=0;}break;
     case'ArrowUp':case'x':case'X':tryR(1);break;
     case'z':case'Z':tryR(-1);break;
-    case' ':let d=0;while(!col(pc.cells,pc.x,pc.y+1)){pc.y++;d++;}sc+=d*2;lockPc();break;
+    case' ':let d=0;while(!col(pc.cells,pc.x,pc.y+1)){pc.y++;d++;}sc+=d*2;sfxHardDrop();lockPc();break;
     case'c':case'C':holdSw();break;
     default:return;
   }
@@ -648,9 +785,10 @@ function startBattle(){
   grid=Array.from({length:ROWS},()=>new Array(COLS).fill(null));
   bag=[];nq=[np2(),np2(),np2(),np2()];hp=null;ch=true;
   sc=0;li=0;lv=1;di=1000;dt2=0;lkT=0;lkM=0;
-  pendingGarbage=0;syncTimer=0;
+  pendingGarbage=0;syncTimer=0;opSc=0;opLi=0;
   gameStartMs=Date.now();
   gameActive=true;lt=performance.now();
+  startMusic();
 
   pc=cp(nq.shift());nq.push(np2());
   updateMyUI();drawMyHold();drawMyNext();drawMyBoard();
@@ -671,6 +809,8 @@ function surrenderGame(){
 
 function showResult(win, reason){
   gameActive=false;
+  stopMusic();
+  sfxEnd(win);
   const elapsed=Math.floor((Date.now()-gameStartMs)/1000);
   const mm=String(Math.floor(elapsed/60)).padStart(2,'0');
   const ss=String(elapsed%60).padStart(2,'0');
@@ -680,7 +820,9 @@ function showResult(win, reason){
   title.className='result-title '+(win?'win':'lose');
   document.getElementById('resultSub').textContent=reason||'';
   document.getElementById('resultStats').innerHTML=
-    'Score: '+sc+'<br>Lines: '+li+'<br>Level: '+lv+'<br>Time: '+mm+':'+ss;
+    '我的分數: '+sc+'　Lines: '+li+'　Level: '+lv+'<br>'+
+    '對手分數: '+opSc+'　Lines: '+opLi+'<br>'+
+    'Time: '+mm+':'+ss;
   document.getElementById('resultOverlay').classList.add('visible');
 }
 </script>
