@@ -624,9 +624,16 @@ function clr(){
   }
 }
 
+function updateHoldUI(){
+  const box=document.getElementById('myHold').closest('.mini-box');
+  if(!box)return;
+  box.style.opacity=ch?'1':'0.35';
+  box.style.borderColor=ch?'':'var(--danger)';
+}
+
 function spn(){
   pc=cp(nq.shift());nq.push(np2());ch=true;lkT=0;lkM=0;
-  drawMyNext();drawMyHold();
+  drawMyNext();drawMyHold();updateHoldUI();
   // Block-out: piece can't fit at top of visible grid
   if(col(pc.cells,pc.x,0)){
     gameActive=false;
@@ -637,9 +644,12 @@ function spn(){
 }
 
 function holdSw(){
-  if(!ch)return;ch=false;const t=pc.type;
+  if(!ch)return;
+  ch=false;
+  const t=pc.type;
   if(hp){pc=cp(hp);}else{pc=cp(nq.shift());nq.push(np2());}
-  hp=t;lkT=0;lkM=0;drawMyHold();drawMyNext();
+  hp=t;lkT=0;lkM=0;
+  drawMyHold();drawMyNext();updateHoldUI();
 }
 
 // ── Garbage lines ──
@@ -798,6 +808,7 @@ function startBattle(){
 
   document.body.focus();
   requestAnimationFrame(gameLoop);
+  requestAnimationFrame(fitGame);
 }
 
 function surrenderGame(){
@@ -825,6 +836,24 @@ function showResult(win, reason){
     'Time: '+mm+':'+ss;
   document.getElementById('resultOverlay').classList.add('visible');
 }
+
+// ── Responsive scaling ──
+function fitGame(){
+  const app = document.getElementById('battleScreen');
+  if(app.classList.contains('hidden')) return;
+  app.style.transform = '';
+  requestAnimationFrame(()=>{
+    const w = app.offsetWidth, h = app.offsetHeight;
+    if(!w || !h) return;
+    const scale = Math.min(
+      window.innerWidth  / w,
+      window.innerHeight / h
+    ) * 0.97;
+    app.style.transformOrigin = 'top center';
+    app.style.transform = scale < 1 ? `scale(${scale.toFixed(3)})` : '';
+  });
+}
+window.addEventListener('resize', fitGame);
 </script>
 </body>
 </html>
