@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8"/>
+<title>Tetris Battle</title>
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --grid-bg: #0d0d18;
+    --grid-line: #1a1a2e;
+    --text: #e0e0e0;
+    --accent: #00ffaa;
+    --accent-dim: #00ffaa33;
+    --glow: 0 0 10px #00ffaa66, 0 0 30px #00ffaa22;
+    --danger: #ff1744;
+    --warning: #ffd600;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Courier New','Consolas',monospace;
+    display:flex; justify-content:center; align-items:center;
+    min-height:100vh; overflow:hidden; user-select:none;
+  }
+  body::after {
+    content:''; position:fixed; inset:0; pointer-events:none; z-index:999;
+    background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.06) 2px,rgba(0,0,0,0.06) 4px);
+  }
+
+  .app { display:flex; flex-direction:column; align-items:center; gap:16px; animation:fadeIn .5s ease; }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+
+  /* ── Top bar ── */
+  .top-bar {
+    display:flex; align-items:center; gap:24px;
+    font-size:11px; color:#888;
+  }
+  .top-bar .room-id { color:var(--accent); font-weight:bold; }
+  .top-bar .vs { font-size:16px; font-weight:bold; color:var(--danger); }
+
+  .player-name {
+    font-size:13px; font-weight:bold; color:#fff;
+    text-align:center; padding:4px 12px;
+    border-radius:4px; background:#1a1a2e;
+  }
+  .player-name.me { border:1px solid var(--accent-dim); }
+  .player-name.op { border:1px solid #ff174433; }
+
+  /* ── Battle area ── */
+  .battle-area {
+    display:flex; gap:20px; align-items:flex-start;
+  }
+
+  /* ── Board container ── */
+  .board-col {
+    display:flex; flex-direction:column; gap:8px; align-items:center;
+  }
+  .board-frame {
+    position:relative; border-radius:6px; overflow:hidden;
+  }
+  .board-frame.me { border:2px solid var(--accent-dim); box-shadow:var(--glow); }
+  .board-frame.op { border:2px solid #ff174422; }
+
+  /* ── Center stats ── */
+  .center-col {
+    display:flex; flex-direction:column; gap:12px;
+    align-items:center; width:100px; padding-top:30px;
+  }
+  .stat-box {
+    background:var(--grid-bg); border:1px solid var(--grid-line);
+    border-radius:6px; padding:8px 10px; width:100%; text-align:center;
+  }
+  .stat-label { font-size:8px; color:var(--accent); letter-spacing:1px; text-transform:uppercase; margin-bottom:4px; }
+  .stat-val { font-size:16px; font-weight:bold; color:#fff; }
+
+  /* ── Attack indicator ── */
+  .attack-bar {
+    width:100%; height:8px; background:#1a1a2e;
+    border-radius:4px; overflow:hidden; margin-top:4px;
+  }
+  .attack-fill {
+    height:100%; width:0%; background:var(--danger);
+    transition:width 0.3s; border-radius:4px;
+  }
+  .attack-label { font-size:8px; color:var(--danger); letter-spacing:1px; text-align:center; }
+
+  /* ── Pending garbage ── */
+  .garbage-bar {
+    position:absolute; left:-14px; bottom:0; width:8px;
+    background:transparent; display:flex; flex-direction:column-reverse;
+  }
+  .garbage-segment {
+    width:8px; height:15px; background:var(--danger);
+    border-radius:2px; margin-top:1px;
+    animation:garbagePulse 0.8s ease infinite alternate;
+  }
+  @keyframes garbagePulse { from{opacity:0.6} to{opacity:1} }
+
+  /* ── Mini panels (hold / next) ── */
+  .mini-panels { display:flex; gap:8px; }
+  .mini-box {
+    background:var(--grid-bg); border:1px solid var(--grid-line);
+    border-radius:4px; padding:6px; text-align:center;
+  }
+  .mini-label { font-size:7px; color:var(--accent); letter-spacing:1px; margin-bottom:4px; }
+
+  /* ── Lobby ── */
+  .lobby {
+    display:flex; flex-direction:column; align-items:center;
+    gap:16px; padding:40px;
+  }
+  .lobby h1 { font-size:22px; font-weight:bold; color:var(--accent); text-shadow:var(--glow); }
+  .lobby .sub { font-size:12px; color:#888; }
+  .lobby input {
+    background:#1a1a2e; border:1px solid var(--grid-line);
+    color:#fff; padding:8px 14px; border-radius:6px;
+    font-family:inherit; font-size:13px; width:220px; text-align:center;
+    outline:none;
+  }
+  .lobby input:focus { border-color:var(--accent); }
+  .lobby input::placeholder { color:#555; }
+  .btn {
+    padding:10px 24px; border-radius:6px; font-family:inherit;
+    font-size:12px; font-weight:bold; cursor:pointer;
+    letter-spacing:1px; transition:all 0.2s; border:none;
+  }
+  .btn-primary { background:var(--accent); color:#0a0a0f; }
+  .btn-primary:hover { opacity:0.85; }
+  .btn-secondary { background:transparent; border:1px solid #555; color:#aaa; }
+  .btn-secondary:hover { border-color:#888; color:#fff; }
+  .btn-row { display:flex; gap:10px; }
+  .btn-small { padding:6px 14px; font-size:10px; }
+
+  .status-text {
+    font-size:12px; color:var(--warning);
+    animation:blink 1.2s infinite;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  .hidden { display:none !important; }
+
+  /* ── Result overlay ── */
+  .result-overlay {
+    position:fixed; inset:0; display:none;
+    justify-content:center; align-items:center;
+    background:rgba(10,10,15,0.9); backdrop-filter:blur(6px); z-index:100;
+  }
+  .result-overlay.visible { display:flex; }
+  .result-box { text-align:center; }
+  .result-title { font-size:28px; font-weight:bold; margin-bottom:8px; }
+  .result-title.win { color:var(--accent); text-shadow:var(--glow); }
+  .result-title.lose { color:var(--danger); }
+  .result-sub { font-size:12px; color:#888; margin-bottom:20px; }
+  .result-stats { font-size:11px; color:#aaa; margin-bottom:20px; line-height:2; }
+</style>
+</head>
+<body tabindex="0">
+
+<!-- ═══ LOBBY SCREEN ═══ -->
+<div class="lobby" id="lobby">
+  <h1>TETRIS BATTLE</h1>
+  <p class="sub">連線對戰 — 消行攻擊模式</p>
+
+  <input id="nameInput" placeholder="輸入你的暱稱" maxlength="12"/>
+
+  <div class="btn-row">
+    <button class="btn btn-primary" onclick="joinRandom()">隨機配對</button>
+    <button class="btn btn-secondary" onclick="showPrivate()">私人房間</button>
+  </div>
+
+  <div id="privateSection" class="hidden">
+    <input id="roomInput" placeholder="輸入房間代碼" maxlength="6" style="margin-bottom:8px;text-transform:uppercase"/>
+    <div class="btn-row">
+      <button class="btn btn-primary btn-small" onclick="joinRoom()">加入房間</button>
+      <button class="btn btn-secondary btn-small" onclick="createRoom()">建立房間</button>
+    </div>
+  </div>
+
+  <div id="statusText" class="status-text hidden"></div>
+  <p class="sub" style="margin-top:20px;font-size:9px;color:#444">
+    Server: <span id="serverAddr">__SERVER_URL__</span>
+  </p>
+</div>
+
+<!-- ═══ BATTLE SCREEN ═══ -->
+<div class="app hidden" id="battleScreen">
+  <div class="top-bar">
+    <div class="player-name me" id="myNameTag">ME</div>
+    <div class="vs">VS</div>
+    <div class="player-name op" id="opNameTag">???</div>
+    <span style="margin-left:12px">Room: <span class="room-id" id="roomIdTag">---</span></span>
+  </div>
+
+  <div class="battle-area">
+    <!-- My board -->
+    <div class="board-col">
+      <div class="mini-panels">
+        <div class="mini-box">
+          <div class="mini-label">HOLD</div>
+          <canvas id="myHold" width="60" height="48"></canvas>
+        </div>
+        <div class="mini-box">
+          <div class="mini-label">NEXT</div>
+          <canvas id="myNext" width="60" height="130"></canvas>
+        </div>
+      </div>
+      <div class="board-frame me" style="position:relative">
+        <div class="garbage-bar" id="myGarbageBar"></div>
+        <canvas id="myBoard" width="240" height="480"></canvas>
+      </div>
+    </div>
+
+    <!-- Center stats -->
+    <div class="center-col">
+      <div class="stat-box">
+        <div class="stat-label">Score</div>
+        <div class="stat-val" id="myScore">0</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">Lines</div>
+        <div class="stat-val" id="myLines">0</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">Level</div>
+        <div class="stat-val" id="myLevel">1</div>
+      </div>
+      <div style="width:100%;margin-top:8px;">
+        <div class="attack-label">ATTACK</div>
+        <div class="attack-bar"><div class="attack-fill" id="attackFill"></div></div>
+      </div>
+      <div class="stat-box" style="margin-top:auto">
+        <div class="stat-label">Time</div>
+        <div class="stat-val" id="gameTime" style="font-size:12px">00:00</div>
+      </div>
+      <button class="btn btn-secondary btn-small" onclick="surrenderGame()" style="margin-top:8px;width:100%">QUIT</button>
+    </div>
+
+    <!-- Opponent board -->
+    <div class="board-col">
+      <div style="text-align:center;margin-bottom:8px">
+        <span style="font-size:9px;color:#888;letter-spacing:1px">OPPONENT</span>
+      </div>
+      <div class="board-frame op">
+        <canvas id="opBoard" width="180" height="360"></canvas>
+      </div>
+      <div style="display:flex;gap:16px;margin-top:8px;font-size:10px;color:#666">
+        <span>Score: <span id="opScore" style="color:#fff">0</span></span>
+        <span>Lines: <span id="opLines" style="color:#fff">0</span></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ RESULT OVERLAY ═══ -->
+<div class="result-overlay" id="resultOverlay">
+  <div class="result-box">
+    <div class="result-title" id="resultTitle">YOU WIN!</div>
+    <div class="result-sub" id="resultSub"></div>
+    <div class="result-stats" id="resultStats"></div>
+    <div class="btn-row" style="justify-content:center">
+      <button class="btn btn-primary" onclick="backToLobby()">BACK TO LOBBY</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════
+//  CONFIG
+// ═══════════════════════════════════════════
+const SERVER_URL = '__SERVER_URL__';
+const DEFAULT_NAME = '__PLAYER_NAME__';
+document.getElementById('nameInput').value = DEFAULT_NAME;
+
+// ═══════════════════════════════════════════
+//  NETWORK
+// ═══════════════════════════════════════════
+let ws = null;
+let connected = false;
+let heartbeatInterval = null;
+let pendingJoinData = null;
+
+function wsConnect(onOpen) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    if (onOpen) onOpen();
+    return;
+  }
+  setStatus('正在連線到伺服器...');
+  ws = new WebSocket(SERVER_URL);
+
+  ws.onopen = () => {
+    connected = true;
+    // Send heartbeat every 10s to keep connection alive
+    clearInterval(heartbeatInterval);
+    heartbeatInterval = setInterval(() => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'ping' }));
+      }
+    }, 10000);
+    if (onOpen) onOpen();
+  };
+
+  ws.onclose = () => {
+    connected = false;
+    clearInterval(heartbeatInterval);
+    if (gameActive) showResult(false, 'Connection lost');
+  };
+
+  ws.onerror = (err) => {
+    console.error('WebSocket error:', err);
+    setStatus('連線失敗！請確認伺服器地址是否正確');
+  };
+
+  ws.onmessage = (e) => handleServerMsg(JSON.parse(e.data));
+}
+
+function wsSend(type, data) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type, data }));
+  }
+}
+
+function setStatus(text) {
+  const el = document.getElementById('statusText');
+  el.textContent = text;
+  el.classList.remove('hidden');
+}
+
+// ═══════════════════════════════════════════
+//  LOBBY
+// ═══════════════════════════════════════════
+function showPrivate() {
+  document.getElementById('privateSection').classList.toggle('hidden');
+}
+
+function joinRandom() {
+  const name = document.getElementById('nameInput').value.trim() || DEFAULT_NAME;
+  setStatus('正在搜尋對手...');
+  wsConnect(() => wsSend('join', { name }));
+}
+
+function joinRoom() {
+  const name = document.getElementById('nameInput').value.trim() || DEFAULT_NAME;
+  const roomId = document.getElementById('roomInput').value.trim().toUpperCase();
+  if (!roomId) return;
+  setStatus('加入房間 ' + roomId + '...');
+  wsConnect(() => wsSend('join', { name, room_id: roomId }));
+}
+
+function createRoom() {
+  const name = document.getElementById('nameInput').value.trim() || DEFAULT_NAME;
+  // Generate a room code client-side for display
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let rid = '';
+  for (let i = 0; i < 6; i++) rid += chars[Math.floor(Math.random()*chars.length)];
+  document.getElementById('roomInput').value = rid;
+  setStatus('房間 ' + rid + ' 已建立，等待對手加入...');
+  wsConnect(() => wsSend('join', { name, room_id: rid }));
+}
+
+function backToLobby() {
+  document.getElementById('resultOverlay').classList.remove('visible');
+  document.getElementById('battleScreen').classList.add('hidden');
+  document.getElementById('lobby').classList.remove('hidden');
+  document.getElementById('statusText').classList.add('hidden');
+  gameActive = false;
+  if (ws) ws.close();
+}
+
+// ═══════════════════════════════════════════
+//  SERVER MESSAGE HANDLER
+// ═══════════════════════════════════════════
+function handleServerMsg(msg) {
+  switch (msg.type) {
+    case 'waiting':
+      // Already showing status
+      break;
+    case 'match_found':
+      const mf = msg.data;
+      document.getElementById('lobby').classList.add('hidden');
+      document.getElementById('battleScreen').classList.remove('hidden');
+      document.getElementById('myNameTag').textContent = document.getElementById('nameInput').value.trim() || DEFAULT_NAME;
+      document.getElementById('opNameTag').textContent = mf.opponent;
+      document.getElementById('roomIdTag').textContent = mf.room_id;
+      startBattle();
+      break;
+    case 'opponent_board':
+      updateOpponentBoard(msg.data);
+      break;
+    case 'opponent_attack':
+      receiveGarbage(msg.data.lines);
+      break;
+    case 'you_win':
+      showResult(true);
+      break;
+    case 'you_lose':
+      showResult(false);
+      break;
+    case 'opponent_left':
+      if (gameActive) showResult(true, '對手已離線');
+      break;
+    case 'error':
+      setStatus('Error: ' + msg.data);
+      break;
+  }
+}
+
+// ═══════════════════════════════════════════
+//  TETRIS ENGINE (my board)
+// ═══════════════════════════════════════════
+const COLS=10, ROWS=20, SZ=24, OP_SZ=18;
+const myCanvas = document.getElementById('myBoard');
+const myCx = myCanvas.getContext('2d');
+const myHoldCx = document.getElementById('myHold').getContext('2d');
+const myNextCx = document.getElementById('myNext').getContext('2d');
+const opCanvas = document.getElementById('opBoard');
+const opCx = opCanvas.getContext('2d');
+
+const CL = {I:'#00e5ff',O:'#ffd600',T:'#d500f9',S:'#00e676',Z:'#ff1744',J:'#2979ff',L:'#ff9100'};
+const SH = {
+  I:[[0,0],[1,0],[2,0],[3,0]], O:[[0,0],[1,0],[0,1],[1,1]],
+  T:[[0,0],[1,0],[2,0],[1,1]], S:[[1,0],[2,0],[0,1],[1,1]],
+  Z:[[0,0],[1,0],[1,1],[2,1]], J:[[0,0],[0,1],[1,1],[2,1]],
+  L:[[2,0],[0,1],[1,1],[2,1]]
+};
+const KK=[[[0,0],[-1,0],[-1,-1],[0,2],[-1,2]],[[0,0],[1,0],[1,1],[0,-2],[1,-2]],[[0,0],[1,0],[1,-1],[0,2],[1,2]],[[0,0],[-1,0],[-1,1],[0,-2],[-1,-2]]];
+
+let grid, pc, nq, hp, ch, sc, li, lv;
+let di, dt2, lt, lkT, lkM, bag=[];
+let gameActive = false;
+let pendingGarbage = 0;
+let gameStartMs = 0;
+let syncTimer = 0;
+
+function rb(){const k=Object.keys(SH);for(let i=k.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[k[i],k[j]]=[k[j],k[i]];}return k;}
+function np2(){if(!bag.length)bag=rb();return bag.pop();}
+function cp(t){return{type:t,cells:SH[t].map(c=>[...c]),x:3,y:-2,rot:0};}
+function rc(cells,d){let mx=0,my=0;cells.forEach(([x,y])=>{mx=Math.max(mx,x);my=Math.max(my,y);});const s=Math.max(mx,my)+1;return cells.map(([x,y])=>d===1?[s-1-y,x]:[y,s-1-x]);}
+function col(cells,ox,oy){return cells.some(([cx,cy])=>{const nx=cx+ox,ny=cy+oy;if(nx<0||nx>=COLS||ny>=ROWS)return true;if(ny<0)return false;return grid[ny][nx]!==null;});}
+
+function tryR(d){
+  const nc=rc(pc.cells,d);const tr=(pc.rot+d+4)%4;
+  const tests=KK[d===1?pc.rot:tr];
+  for(const[kx,ky]of tests){
+    const dx=d===1?kx:-kx,dy=d===1?-ky:ky;
+    if(!col(nc,pc.x+dx,pc.y+dy)){pc.cells=nc;pc.x+=dx;pc.y+=dy;pc.rot=tr;lkT=0;return true;}
+  }
+  return false;
+}
+
+function gy2(){let y=pc.y;while(!col(pc.cells,pc.x,y+1))y++;return y;}
+
+function lockPc(){
+  pc.cells.forEach(([cx,cy])=>{
+    const nx=cx+pc.x,ny=cy+pc.y;
+    if(ny>=0&&ny<ROWS&&nx>=0&&nx<COLS)grid[ny][nx]=pc.type;
+  });
+  clr();
+  // Apply pending garbage AFTER clearing
+  applyGarbage();
+  spn();
+}
+
+function clr(){
+  let c=0;
+  for(let y=ROWS-1;y>=0;y--){
+    if(grid[y].every(v=>v!==null)){grid.splice(y,1);grid.unshift(new Array(COLS).fill(null));c++;y++;}
+  }
+  if(c>0){
+    const pts=[0,100,300,500,800][c]*lv;
+    sc+=pts; li+=c;
+    lv=Math.floor(li/10)+1;
+    di=Math.max(50,1000-(lv-1)*80);
+
+    // Send attack! Garbage lines = cleared - 1 (single=0, double=1, triple=2, tetris=3)
+    const attackLines = c - 1;
+    if(attackLines > 0){
+      // If we have pending garbage, cancel some first
+      if(pendingGarbage > 0){
+        const cancel = Math.min(pendingGarbage, attackLines);
+        pendingGarbage -= cancel;
+        const remaining = attackLines - cancel;
+        if(remaining > 0) wsSend('attack', {lines: remaining});
+      } else {
+        wsSend('attack', {lines: attackLines});
+      }
+      flashAttack(attackLines);
+    }
+    updateGarbageBar();
+    updateMyUI();
+  }
+}
+
+function spn(){
+  pc=cp(nq.shift());nq.push(np2());ch=true;lkT=0;lkM=0;
+  if(col(pc.cells,pc.x,pc.y)){
+    gameActive=false;
+    wsSend('game_over',{});
+    showResult(false,'方塊堆滿了！');
+  }
+  drawMyNext();drawMyHold();
+}
+
+function holdSw(){
+  if(!ch)return;ch=false;const t=pc.type;
+  if(hp){pc=cp(hp);}else{pc=cp(nq.shift());nq.push(np2());}
+  hp=t;lkT=0;lkM=0;drawMyHold();drawMyNext();
+}
+
+// ── Garbage lines ──
+function receiveGarbage(n) {
+  pendingGarbage += n;
+  updateGarbageBar();
+}
+
+function applyGarbage() {
+  if (pendingGarbage <= 0) return;
+  const n = pendingGarbage;
+  pendingGarbage = 0;
+  // Add n garbage lines at bottom with one random gap
+  for (let i = 0; i < n; i++) {
+    grid.shift(); // remove top row
+    const row = new Array(COLS).fill('G'); // 'G' = garbage
+    const gap = Math.floor(Math.random() * COLS);
+    row[gap] = null;
+    grid.push(row);
+  }
+  updateGarbageBar();
+}
+
+function updateGarbageBar() {
+  const bar = document.getElementById('myGarbageBar');
+  bar.innerHTML = '';
+  for (let i = 0; i < Math.min(pendingGarbage, 20); i++) {
+    const seg = document.createElement('div');
+    seg.className = 'garbage-segment';
+    bar.appendChild(seg);
+  }
+}
+
+function flashAttack(n) {
+  const fill = document.getElementById('attackFill');
+  fill.style.width = Math.min(n * 33, 100) + '%';
+  setTimeout(() => { fill.style.width = '0%'; }, 600);
+}
+
+// ── Drawing ──
+function dc2(c,x,y,t,sz,a=1){
+  c.globalAlpha=a;c.fillStyle=t==='G'?'#555':CL[t];
+  c.fillRect(x*sz+1,y*sz+1,sz-2,sz-2);
+  c.fillStyle='rgba(255,255,255,0.2)';c.fillRect(x*sz+1,y*sz+1,sz-2,2);
+  c.fillStyle='rgba(0,0,0,0.2)';c.fillRect(x*sz+1,y*sz+sz-3,sz-2,2);
+  c.globalAlpha=1;
+}
+
+function drawMyBoard(){
+  myCx.fillStyle='#0d0d18';myCx.fillRect(0,0,COLS*SZ,ROWS*SZ);
+  myCx.strokeStyle='#1a1a2e';myCx.lineWidth=0.3;
+  for(let x=0;x<=COLS;x++){myCx.beginPath();myCx.moveTo(x*SZ,0);myCx.lineTo(x*SZ,ROWS*SZ);myCx.stroke();}
+  for(let y=0;y<=ROWS;y++){myCx.beginPath();myCx.moveTo(0,y*SZ);myCx.lineTo(COLS*SZ,y*SZ);myCx.stroke();}
+  for(let y=0;y<ROWS;y++)for(let x=0;x<COLS;x++)if(grid[y][x])dc2(myCx,x,y,grid[y][x],SZ);
+
+  if(pc&&gameActive){
+    const g=gy2();
+    pc.cells.forEach(([cx,cy])=>{const nx=cx+pc.x,ny=cy+g;if(ny>=0){myCx.fillStyle='rgba(255,255,255,0.06)';myCx.fillRect(nx*SZ+1,ny*SZ+1,SZ-2,SZ-2);}});
+    pc.cells.forEach(([cx,cy])=>{const nx=cx+pc.x,ny=cy+pc.y;if(ny>=0)dc2(myCx,nx,ny,pc.type,SZ);});
+  }
+}
+
+function dm2(c,t,ox,oy,s){
+  const cs=SH[t];let mnx=9,mxx=0,mny=9,mxy=0;
+  cs.forEach(([x,y])=>{mnx=Math.min(mnx,x);mxx=Math.max(mxx,x);mny=Math.min(mny,y);mxy=Math.max(mxy,y);});
+  const w=mxx-mnx+1,h=mxy-mny+1;const sx=ox+(4-w)*s/2-mnx*s,sy=oy+(2-h)*s/2-mny*s;
+  cs.forEach(([cx,cy])=>{c.fillStyle=CL[t];c.fillRect(sx+cx*s+1,sy+cy*s+1,s-2,s-2);});
+}
+
+function drawMyHold(){myHoldCx.clearRect(0,0,60,48);if(hp)dm2(myHoldCx,hp,2,8,11);}
+function drawMyNext(){myNextCx.clearRect(0,0,60,130);nq.forEach((t,i)=>dm2(myNextCx,t,2,4+i*32,10));}
+
+function updateMyUI(){
+  document.getElementById('myScore').textContent=sc;
+  document.getElementById('myLines').textContent=li;
+  document.getElementById('myLevel').textContent=lv;
+}
+
+// ── Opponent board ──
+function updateOpponentBoard(data){
+  if(!data)return;
+  opCx.fillStyle='#0d0d18';opCx.fillRect(0,0,COLS*OP_SZ,ROWS*OP_SZ);
+  opCx.strokeStyle='#1a1a2e';opCx.lineWidth=0.2;
+  for(let x=0;x<=COLS;x++){opCx.beginPath();opCx.moveTo(x*OP_SZ,0);opCx.lineTo(x*OP_SZ,ROWS*OP_SZ);opCx.stroke();}
+  for(let y=0;y<=ROWS;y++){opCx.beginPath();opCx.moveTo(0,y*OP_SZ);opCx.lineTo(COLS*OP_SZ,y*OP_SZ);opCx.stroke();}
+
+  if(data.grid){
+    for(let y=0;y<ROWS;y++)for(let x=0;x<COLS;x++){
+      const v=data.grid[y]?data.grid[y][x]:null;
+      if(v)dc2(opCx,x,y,v,OP_SZ);
+    }
+  }
+  document.getElementById('opScore').textContent=data.score||0;
+  document.getElementById('opLines').textContent=data.lines||0;
+}
+
+// ── Sync my board state to opponent ──
+function syncBoard(){
+  wsSend('board_state',{grid,score:sc,lines:li,level:lv});
+}
+
+// ── Input ──
+function handleKey(e){
+  if(!gameActive)return;
+  switch(e.key){
+    case'ArrowLeft':if(!col(pc.cells,pc.x-1,pc.y)){pc.x--;lkT=0;}break;
+    case'ArrowRight':if(!col(pc.cells,pc.x+1,pc.y)){pc.x++;lkT=0;}break;
+    case'ArrowDown':if(!col(pc.cells,pc.x,pc.y+1)){pc.y++;sc+=1;dt2=0;}break;
+    case'ArrowUp':case'x':case'X':tryR(1);break;
+    case'z':case'Z':tryR(-1);break;
+    case' ':let d=0;while(!col(pc.cells,pc.x,pc.y+1)){pc.y++;d++;}sc+=d*2;lockPc();break;
+    case'c':case'C':holdSw();break;
+    default:return;
+  }
+  e.preventDefault();updateMyUI();
+}
+document.addEventListener('keydown',handleKey);
+
+// ── Game loop ──
+function gameLoop(now){
+  if(!gameActive)return;
+  const d=now-lt;lt=now;dt2+=d;
+  if(dt2>=di){dt2=0;if(!col(pc.cells,pc.x,pc.y+1))pc.y++;}
+  if(col(pc.cells,pc.x,pc.y+1)){lkT+=d;if(lkT>=500||lkM>=15){lockPc();lkT=0;}}else{lkT=0;}
+
+  // Sync board to opponent every ~200ms
+  syncTimer+=d;
+  if(syncTimer>=200){syncTimer=0;syncBoard();}
+
+  // Update timer
+  const elapsed=Math.floor((Date.now()-gameStartMs)/1000);
+  const mm=String(Math.floor(elapsed/60)).padStart(2,'0');
+  const ss=String(elapsed%60).padStart(2,'0');
+  document.getElementById('gameTime').textContent=mm+':'+ss;
+
+  drawMyBoard();
+  requestAnimationFrame(gameLoop);
+}
+
+function startBattle(){
+  grid=Array.from({length:ROWS},()=>new Array(COLS).fill(null));
+  bag=[];nq=[np2(),np2(),np2(),np2()];hp=null;ch=true;
+  sc=0;li=0;lv=1;di=1000;dt2=0;lkT=0;lkM=0;
+  pendingGarbage=0;syncTimer=0;
+  gameStartMs=Date.now();
+  gameActive=true;lt=performance.now();
+
+  pc=cp(nq.shift());nq.push(np2());
+  updateMyUI();drawMyHold();drawMyNext();drawMyBoard();
+  // Clear opponent board
+  opCx.fillStyle='#0d0d18';opCx.fillRect(0,0,COLS*OP_SZ,ROWS*OP_SZ);
+  updateGarbageBar();
+
+  document.body.focus();
+  requestAnimationFrame(gameLoop);
+}
+
+function surrenderGame(){
+  if(!gameActive)return;
+  gameActive=false;
+  wsSend('game_over',{});
+  showResult(false,'你投降了');
+}
+
+function showResult(win, reason){
+  gameActive=false;
+  const elapsed=Math.floor((Date.now()-gameStartMs)/1000);
+  const mm=String(Math.floor(elapsed/60)).padStart(2,'0');
+  const ss=String(elapsed%60).padStart(2,'0');
+
+  const title=document.getElementById('resultTitle');
+  title.textContent=win?'YOU WIN!':'YOU LOSE';
+  title.className='result-title '+(win?'win':'lose');
+  document.getElementById('resultSub').textContent=reason||'';
+  document.getElementById('resultStats').innerHTML=
+    'Score: '+sc+'<br>Lines: '+li+'<br>Level: '+lv+'<br>Time: '+mm+':'+ss;
+  document.getElementById('resultOverlay').classList.add('visible');
+}
+</script>
+</body>
+</html>

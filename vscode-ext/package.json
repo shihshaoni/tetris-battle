@@ -1,0 +1,46 @@
+{
+  "name": "tetris-battle",
+  "displayName": "Tetris Battle — Multiplayer for VS Code",
+  "description": "Play Tetris against friends while waiting for Claude Code. Attack mode with garbage lines!",
+  "version": "2.0.0",
+  "publisher": "your-publisher-id",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "tetris.battle",
+        "title": "Tetris Battle: Start 🎮"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "tetris.battle",
+        "key": "ctrl+shift+t",
+        "mac": "cmd+shift+t"
+      }
+    ],
+    "configuration": {
+      "title": "Tetris Battle",
+      "properties": {
+        "tetrisBattle.serverUrl": {
+          "type": "string",
+          "default": "wss://tetris-battle.fly.dev/ws",
+          "description": "WebSocket server URL for multiplayer"
+        },
+        "tetrisBattle.playerName": {
+          "type": "string",
+          "default": "",
+          "description": "Your display name in matches"
+        }
+      }
+    }
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0"
+  }
+}
