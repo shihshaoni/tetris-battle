@@ -72,8 +72,20 @@ PORT=8080 ./tetris-server
 
 ## 🎮 安裝 VS Code 擴充套件
 
+用 symlink 安裝，這樣每次 `git pull` 後只要 Reload VS Code 視窗就能套用更新，不用重複複製：
+
 ```bash
-cp -r vscode-ext ~/.vscode/extensions/tetris-battle
+# 如果之前已經用 cp 安裝過，先清掉舊的
+rm -rf ~/.vscode/extensions/tetris-battle
+
+# 建立 symlink（路徑換成你 clone 的位置）
+ln -s "$(pwd)/vscode-ext" ~/.vscode/extensions/tetris-battle
+```
+
+之後更新流程：
+```bash
+git pull
+# 在 VS Code: Cmd+Shift+P → "Developer: Reload Window"
 ```
 
 重啟 VS Code 後，到 Settings 搜尋 `tetrisBattle`，設定：
