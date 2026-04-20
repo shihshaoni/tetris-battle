@@ -26,17 +26,20 @@ const (
 	MsgAttack     MsgType = "attack"
 	MsgGameOver   MsgType = "game_over"
 	MsgLeave      MsgType = "leave"
+	MsgReady      MsgType = "ready"
 
 	// Server -> Client
-	MsgWaiting    MsgType = "waiting"
-	MsgMatchFound MsgType = "match_found"
-	MsgOpBoard    MsgType = "opponent_board"
-	MsgOpAttack   MsgType = "opponent_attack"
-	MsgOpLeft     MsgType = "opponent_left"
-	MsgYouWin     MsgType = "you_win"
-	MsgYouLose    MsgType = "you_lose"
-	MsgError      MsgType = "error"
-	MsgRoomInfo   MsgType = "room_info"
+	MsgWaiting     MsgType = "waiting"
+	MsgMatchFound  MsgType = "match_found"
+	MsgOpBoard     MsgType = "opponent_board"
+	MsgOpAttack    MsgType = "opponent_attack"
+	MsgOpLeft      MsgType = "opponent_left"
+	MsgOpReady     MsgType = "opponent_ready"
+	MsgGameStart   MsgType = "game_start"
+	MsgYouWin      MsgType = "you_win"
+	MsgYouLose     MsgType = "you_lose"
+	MsgError       MsgType = "error"
+	MsgRoomInfo    MsgType = "room_info"
 )
 
 type Message struct {
@@ -106,11 +109,13 @@ func (p *Player) Close() {
 }
 
 type Room struct {
-	id      string
-	players [2]*Player
-	count   int
-	mu      sync.Mutex
-	started bool
+	id       string
+	players  [2]*Player
+	count    int
+	mu       sync.Mutex
+	started  bool
+	ready    [2]bool
+	gameOn   bool
 }
 
 func (r *Room) Opponent(p *Player) *Player {
@@ -184,6 +189,10 @@ func (s *Server) handleJoin(p *Player, joinData JoinData) {
 		room.players[room.count] = p
 		room.count++
 		p.room = room
+		// Reset ready state for a fresh match
+		room.ready[0] = false
+		room.ready[1] = false
+		room.gameOn = false
 
 		if room.count == 2 {
 			room.started = true
@@ -358,6 +367,47 @@ func (s *Server) handleConnection(w http.ResponseWriter, r *http.Request) {
 				// The one who sent game_over lost
 				player.Send(Message{Type: MsgYouLose})
 				op.Send(Message{Type: MsgYouWin})
+			}
+
+		case MsgReady:
+			if player.room == nil {
+				continue
+			}
+			room := player.room
+			room.mu.Lock()
+			if room.count < 2 || room.gameOn {
+				room.mu.Unlock()
+				continue
+			}
+			idx := -1
+			for i, rp := range room.players {
+				if rp == player {
+					idx = i
+					break
+				}
+			}
+			if idx < 0 {
+				room.mu.Unlock()
+				continue
+			}
+			alreadyReady := room.ready[idx]
+			room.ready[idx] = true
+			bothReady := room.ready[0] && room.ready[1]
+			if bothReady {
+				room.gameOn = true
+			}
+			p0 := room.players[0]
+			p1 := room.players[1]
+			room.mu.Unlock()
+
+			if bothReady {
+				p0.Send(Message{Type: MsgGameStart})
+				p1.Send(Message{Type: MsgGameStart})
+			} else if !alreadyReady {
+				op := room.Opponent(player)
+				if op != nil {
+					op.Send(Message{Type: MsgOpReady})
+				}
 			}
 
 		case MsgLeave:

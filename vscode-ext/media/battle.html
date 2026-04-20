@@ -147,6 +147,35 @@
     background:rgba(10,10,15,0.9); backdrop-filter:blur(6px); z-index:100;
   }
   .result-overlay.visible { display:flex; }
+
+  /* ── Ready overlay ── */
+  .ready-overlay {
+    position:fixed; inset:0; display:none;
+    justify-content:center; align-items:center;
+    background:rgba(10,10,15,0.88); backdrop-filter:blur(4px); z-index:90;
+  }
+  .ready-overlay.visible { display:flex; }
+  .ready-box {
+    text-align:center;
+    background:var(--grid-bg);
+    border:1px solid var(--accent-dim);
+    border-radius:8px;
+    padding:28px 40px;
+    box-shadow:var(--glow);
+  }
+  .ready-title { font-size:20px; font-weight:bold; color:var(--accent); margin-bottom:6px; letter-spacing:2px; }
+  .ready-sub { font-size:11px; color:#888; margin-bottom:20px; }
+  .ready-row {
+    display:flex; justify-content:center; gap:32px;
+    margin-bottom:22px; font-size:11px;
+  }
+  .ready-slot { display:flex; flex-direction:column; gap:4px; align-items:center; }
+  .ready-slot .name { color:#ccc; font-weight:bold; }
+  .ready-slot .state { font-size:10px; letter-spacing:1px; color:#666; }
+  .ready-slot.ready .state { color:var(--accent); }
+  .btn-primary:disabled {
+    background:#1a1a2e; color:#555; cursor:not-allowed;
+  }
   .result-box { text-align:center; }
   .result-title { font-size:28px; font-weight:bold; margin-bottom:8px; }
   .result-title.win { color:var(--accent); text-shadow:var(--glow); }
@@ -234,7 +263,6 @@
         <div class="stat-val" id="gameTime" style="font-size:12px">00:00</div>
       </div>
       <button class="btn btn-secondary btn-small" onclick="surrenderGame()" style="margin-top:8px;width:100%">QUIT</button>
-      <button class="btn btn-secondary btn-small" id="muteBtn" onclick="toggleMute()" style="margin-top:4px;width:100%">🔊</button>
     </div>
 
     <!-- Opponent board -->
@@ -249,6 +277,28 @@
         <span>Score: <span id="opScore" style="color:#fff">0</span></span>
         <span>Lines: <span id="opLines" style="color:#fff">0</span></span>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ READY OVERLAY ═══ -->
+<div class="ready-overlay" id="readyOverlay">
+  <div class="ready-box">
+    <div class="ready-title">READY?</div>
+    <div class="ready-sub">雙方都按下 START 才會開始遊戲</div>
+    <div class="ready-row">
+      <div class="ready-slot" id="myReadySlot">
+        <div class="name" id="myReadyName">ME</div>
+        <div class="state" id="myReadyState">NOT READY</div>
+      </div>
+      <div class="ready-slot" id="opReadySlot">
+        <div class="name" id="opReadyName">???</div>
+        <div class="state" id="opReadyState">NOT READY</div>
+      </div>
+    </div>
+    <div class="btn-row" style="justify-content:center">
+      <button class="btn btn-primary" id="startBtn" onclick="sendReady()">START</button>
+      <button class="btn btn-secondary btn-small" onclick="backToLobby()">CANCEL</button>
     </div>
   </div>
 </div>
@@ -272,123 +322,6 @@
 const SERVER_URL = '__SERVER_URL__';
 const DEFAULT_NAME = '__PLAYER_NAME__';
 document.getElementById('nameInput').value = DEFAULT_NAME;
-
-// ═══════════════════════════════════════════
-//  AUDIO ENGINE
-// ═══════════════════════════════════════════
-let audioCtx = null, musicGain = null, sfxGain = null;
-let musicTimer = null, musicIdx = 0, musicNext = 0, musicMuted = false;
-
-const FR = {
-  E5:659.25,D5:587.33,C5:523.25,B4:493.88,A4:440.00,
-  F5:698.46,G5:783.99,A5:880.00
-};
-const BPM=150, B=60/BPM;
-
-// Tetris Theme A (Korobeiniki)
-const MELODY=[
-  [FR.E5,1],[FR.B4,.5],[FR.C5,.5],[FR.D5,1],[FR.C5,.5],[FR.B4,.5],
-  [FR.A4,1],[FR.A4,.5],[FR.C5,.5],[FR.E5,1],[FR.D5,.5],[FR.C5,.5],
-  [FR.B4,1.5],[FR.C5,.5],[FR.D5,1],[FR.E5,1],
-  [FR.C5,1],[FR.A4,1],[0,2],
-  [FR.D5,1],[FR.F5,.5],[FR.A5,1.5],[FR.G5,.5],[FR.F5,.5],
-  [FR.E5,1.5],[FR.C5,.5],[FR.E5,1],[FR.D5,.5],[FR.C5,.5],
-  [FR.B4,1],[FR.B4,.5],[FR.C5,.5],[FR.D5,1],[FR.E5,1],
-  [FR.C5,1],[FR.A4,1],[0,2],
-];
-
-function initAudio(){
-  if(audioCtx)return;
-  audioCtx=new(window.AudioContext||window.webkitAudioContext)();
-  musicGain=audioCtx.createGain(); musicGain.gain.value=0.12; musicGain.connect(audioCtx.destination);
-  sfxGain=audioCtx.createGain(); sfxGain.gain.value=0.4; sfxGain.connect(audioCtx.destination);
-}
-
-function note(freq,start,dur,dst,type='square'){
-  if(!audioCtx||!dst||freq===0)return;
-  const o=audioCtx.createOscillator(),e=audioCtx.createGain();
-  o.type=type; o.frequency.value=freq;
-  o.connect(e); e.connect(dst);
-  e.gain.setValueAtTime(1,start);
-  e.gain.exponentialRampToValueAtTime(0.001,start+dur*0.9);
-  o.start(start); o.stop(start+dur);
-}
-
-function scheduleMelody(){
-  if(!audioCtx||musicMuted)return;
-  while(musicNext<audioCtx.currentTime+0.15){
-    const[freq,beats]=MELODY[musicIdx];
-    note(freq,musicNext,beats*B*0.92,musicGain,'square');
-    musicNext+=beats*B;
-    musicIdx=(musicIdx+1)%MELODY.length;
-  }
-}
-
-function startMusic(){
-  initAudio();
-  if(musicTimer)return;
-  musicIdx=0; musicNext=audioCtx.currentTime+0.05;
-  scheduleMelody();
-  musicTimer=setInterval(scheduleMelody,50);
-}
-
-function stopMusic(){
-  if(musicTimer){clearInterval(musicTimer);musicTimer=null;}
-}
-
-function toggleMute(){
-  musicMuted=!musicMuted;
-  if(musicGain)musicGain.gain.value=musicMuted?0:0.12;
-  if(sfxGain)sfxGain.gain.value=musicMuted?0:0.4;
-  document.getElementById('muteBtn').textContent=musicMuted?'🔇':'🔊';
-}
-
-// Sound effects
-function sfxLock(){
-  if(!audioCtx||musicMuted)return;
-  const t=audioCtx.currentTime;
-  const o=audioCtx.createOscillator(),e=audioCtx.createGain();
-  o.type='square'; o.connect(e); e.connect(sfxGain);
-  o.frequency.setValueAtTime(200,t); o.frequency.exponentialRampToValueAtTime(80,t+0.08);
-  e.gain.setValueAtTime(0.6,t); e.gain.exponentialRampToValueAtTime(0.001,t+0.1);
-  o.start(t); o.stop(t+0.1);
-}
-
-function sfxClear(lines){
-  if(!audioCtx||musicMuted)return;
-  const t=audioCtx.currentTime;
-  const s=[523,659,784,1047];
-  s.slice(0,lines).forEach((f,i)=>note(f,t+i*0.07,0.15,sfxGain,'sine'));
-  if(lines===4){note(1047,t+0.3,0.15,sfxGain,'sine');note(1319,t+0.46,0.25,sfxGain,'sine');}
-}
-
-function sfxAttackSnd(){
-  if(!audioCtx||musicMuted)return;
-  const t=audioCtx.currentTime;
-  note(880,t,0.05,sfxGain,'sawtooth'); note(1109,t+0.06,0.05,sfxGain,'sawtooth');
-}
-
-function sfxGarbageSnd(){
-  if(!audioCtx||musicMuted)return;
-  const t=audioCtx.currentTime;
-  note(220,t,0.04,sfxGain,'sawtooth'); note(150,t+0.05,0.1,sfxGain,'sawtooth');
-}
-
-function sfxHardDrop(){
-  if(!audioCtx||musicMuted)return;
-  const t=audioCtx.currentTime;
-  note(400,t,0.03,sfxGain,'square'); note(250,t+0.03,0.05,sfxGain,'square');
-}
-
-function sfxEnd(win){
-  if(!audioCtx)return;
-  const t=audioCtx.currentTime;
-  if(win){
-    [523,659,784,1047,1319].forEach((f,i)=>note(f,t+i*0.1,0.15,sfxGain,'sine'));
-  } else {
-    [440,415,392,370,349,330].forEach((f,i)=>note(f,t+i*0.12,0.18,sfxGain,'square'));
-  }
-}
 
 // ═══════════════════════════════════════════
 //  NETWORK
@@ -452,14 +385,12 @@ function showPrivate() {
 }
 
 function joinRandom() {
-  initAudio();
   const name = document.getElementById('nameInput').value.trim() || DEFAULT_NAME;
   setStatus('正在搜尋對手...');
   wsConnect(() => wsSend('join', { name }));
 }
 
 function joinRoom() {
-  initAudio();
   const name = document.getElementById('nameInput').value.trim() || DEFAULT_NAME;
   const roomId = document.getElementById('roomInput').value.trim().toUpperCase();
   if (!roomId) return;
@@ -468,7 +399,6 @@ function joinRoom() {
 }
 
 function createRoom() {
-  initAudio();
   const name = document.getElementById('nameInput').value.trim() || DEFAULT_NAME;
   // Generate a room code client-side for display
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -481,11 +411,53 @@ function createRoom() {
 
 function backToLobby() {
   document.getElementById('resultOverlay').classList.remove('visible');
+  hideReadyOverlay();
   document.getElementById('battleScreen').classList.add('hidden');
   document.getElementById('lobby').classList.remove('hidden');
   document.getElementById('statusText').classList.add('hidden');
   gameActive = false;
   if (ws) ws.close();
+}
+
+// ═══════════════════════════════════════════
+//  READY OVERLAY
+// ═══════════════════════════════════════════
+function showReadyOverlay(myName, opName) {
+  document.getElementById('myReadyName').textContent = myName;
+  document.getElementById('opReadyName').textContent = opName;
+  setMyReadyState(false);
+  setOpReadyState(false);
+  const btn = document.getElementById('startBtn');
+  btn.disabled = false;
+  btn.textContent = 'START';
+  document.getElementById('readyOverlay').classList.add('visible');
+}
+
+function hideReadyOverlay() {
+  document.getElementById('readyOverlay').classList.remove('visible');
+}
+
+function setMyReadyState(ready) {
+  const slot = document.getElementById('myReadySlot');
+  const state = document.getElementById('myReadyState');
+  slot.classList.toggle('ready', ready);
+  state.textContent = ready ? 'READY' : 'NOT READY';
+}
+
+function setOpReadyState(ready) {
+  const slot = document.getElementById('opReadySlot');
+  const state = document.getElementById('opReadyState');
+  slot.classList.toggle('ready', ready);
+  state.textContent = ready ? 'READY' : 'NOT READY';
+}
+
+function sendReady() {
+  const btn = document.getElementById('startBtn');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  btn.textContent = 'WAITING...';
+  setMyReadyState(true);
+  wsSend('ready', {});
 }
 
 // ═══════════════════════════════════════════
@@ -498,11 +470,19 @@ function handleServerMsg(msg) {
       break;
     case 'match_found':
       const mf = msg.data;
+      const myName = document.getElementById('nameInput').value.trim() || DEFAULT_NAME;
       document.getElementById('lobby').classList.add('hidden');
       document.getElementById('battleScreen').classList.remove('hidden');
-      document.getElementById('myNameTag').textContent = document.getElementById('nameInput').value.trim() || DEFAULT_NAME;
+      document.getElementById('myNameTag').textContent = myName;
       document.getElementById('opNameTag').textContent = mf.opponent;
       document.getElementById('roomIdTag').textContent = mf.room_id;
+      showReadyOverlay(myName, mf.opponent);
+      break;
+    case 'opponent_ready':
+      setOpReadyState(true);
+      break;
+    case 'game_start':
+      hideReadyOverlay();
       startBattle();
       break;
     case 'opponent_board':
@@ -512,12 +492,10 @@ function handleServerMsg(msg) {
       receiveGarbage(msg.data.lines);
       break;
     case 'you_win':
-      showResult(true, '對手方塊觸頂！');
+      showResult(true);
       break;
     case 'you_lose':
-      // already shown locally; just ensure overlay is visible
-      if (!document.getElementById('resultOverlay').classList.contains('visible'))
-        showResult(false, '方塊觸頂！');
+      showResult(false);
       break;
     case 'opponent_left':
       if (gameActive) showResult(true, '對手已離線');
@@ -554,7 +532,6 @@ let gameActive = false;
 let pendingGarbage = 0;
 let gameStartMs = 0;
 let syncTimer = 0;
-let opSc = 0, opLi = 0;
 
 function rb(){const k=Object.keys(SH);for(let i=k.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[k[i],k[j]]=[k[j],k[i]];}return k;}
 function np2(){if(!bag.length)bag=rb();return bag.pop();}
@@ -575,20 +552,12 @@ function tryR(d){
 function gy2(){let y=pc.y;while(!col(pc.cells,pc.x,y+1))y++;return y;}
 
 function lockPc(){
-  let topOut = false;
   pc.cells.forEach(([cx,cy])=>{
     const nx=cx+pc.x,ny=cy+pc.y;
-    if(ny <= 0) topOut = true;
     if(ny>=0&&ny<ROWS&&nx>=0&&nx<COLS)grid[ny][nx]=pc.type;
   });
-  sfxLock();
   clr();
-  if(topOut){
-    gameActive=false;
-    wsSend('game_over',{});
-    showResult(false,'方塊觸頂！');
-    return;
-  }
+  // Apply pending garbage AFTER clearing
   applyGarbage();
   spn();
 }
@@ -605,17 +574,16 @@ function clr(){
     di=Math.max(50,1000-(lv-1)*80);
 
     // Send attack! Garbage lines = cleared - 1 (single=0, double=1, triple=2, tetris=3)
-    sfxClear(c);
     const attackLines = c - 1;
     if(attackLines > 0){
+      // If we have pending garbage, cancel some first
       if(pendingGarbage > 0){
         const cancel = Math.min(pendingGarbage, attackLines);
         pendingGarbage -= cancel;
         const remaining = attackLines - cancel;
-        if(remaining > 0){wsSend('attack', {lines: remaining});sfxAttackSnd();}
+        if(remaining > 0) wsSend('attack', {lines: remaining});
       } else {
         wsSend('attack', {lines: attackLines});
-        sfxAttackSnd();
       }
       flashAttack(attackLines);
     }
@@ -624,38 +592,25 @@ function clr(){
   }
 }
 
-function updateHoldUI(){
-  const box=document.getElementById('myHold').closest('.mini-box');
-  if(!box)return;
-  box.style.opacity=ch?'1':'0.35';
-  box.style.borderColor=ch?'':'var(--danger)';
-}
-
 function spn(){
   pc=cp(nq.shift());nq.push(np2());ch=true;lkT=0;lkM=0;
-  drawMyNext();drawMyHold();updateHoldUI();
-  // Block-out: piece can't fit at top of visible grid
-  if(col(pc.cells,pc.x,0)){
+  if(col(pc.cells,pc.x,pc.y)){
     gameActive=false;
     wsSend('game_over',{});
-    showResult(false,'方塊觸頂！');
-    return;
+    showResult(false,'方塊堆滿了！');
   }
+  drawMyNext();drawMyHold();
 }
 
 function holdSw(){
-  if(!ch)return;
-  ch=false;
-  const t=pc.type;
+  if(!ch)return;ch=false;const t=pc.type;
   if(hp){pc=cp(hp);}else{pc=cp(nq.shift());nq.push(np2());}
-  hp=t;lkT=0;lkM=0;
-  drawMyHold();drawMyNext();updateHoldUI();
+  hp=t;lkT=0;lkM=0;drawMyHold();drawMyNext();
 }
 
 // ── Garbage lines ──
 function receiveGarbage(n) {
   pendingGarbage += n;
-  sfxGarbageSnd();
   updateGarbageBar();
 }
 
@@ -743,9 +698,8 @@ function updateOpponentBoard(data){
       if(v)dc2(opCx,x,y,v,OP_SZ);
     }
   }
-  opSc=data.score||0;opLi=data.lines||0;
-  document.getElementById('opScore').textContent=opSc;
-  document.getElementById('opLines').textContent=opLi;
+  document.getElementById('opScore').textContent=data.score||0;
+  document.getElementById('opLines').textContent=data.lines||0;
 }
 
 // ── Sync my board state to opponent ──
@@ -762,7 +716,7 @@ function handleKey(e){
     case'ArrowDown':if(!col(pc.cells,pc.x,pc.y+1)){pc.y++;sc+=1;dt2=0;}break;
     case'ArrowUp':case'x':case'X':tryR(1);break;
     case'z':case'Z':tryR(-1);break;
-    case' ':let d=0;while(!col(pc.cells,pc.x,pc.y+1)){pc.y++;d++;}sc+=d*2;sfxHardDrop();lockPc();break;
+    case' ':let d=0;while(!col(pc.cells,pc.x,pc.y+1)){pc.y++;d++;}sc+=d*2;lockPc();break;
     case'c':case'C':holdSw();break;
     default:return;
   }
@@ -795,10 +749,9 @@ function startBattle(){
   grid=Array.from({length:ROWS},()=>new Array(COLS).fill(null));
   bag=[];nq=[np2(),np2(),np2(),np2()];hp=null;ch=true;
   sc=0;li=0;lv=1;di=1000;dt2=0;lkT=0;lkM=0;
-  pendingGarbage=0;syncTimer=0;opSc=0;opLi=0;
+  pendingGarbage=0;syncTimer=0;
   gameStartMs=Date.now();
   gameActive=true;lt=performance.now();
-  startMusic();
 
   pc=cp(nq.shift());nq.push(np2());
   updateMyUI();drawMyHold();drawMyNext();drawMyBoard();
@@ -808,7 +761,6 @@ function startBattle(){
 
   document.body.focus();
   requestAnimationFrame(gameLoop);
-  requestAnimationFrame(fitGame);
 }
 
 function surrenderGame(){
@@ -820,8 +772,6 @@ function surrenderGame(){
 
 function showResult(win, reason){
   gameActive=false;
-  stopMusic();
-  sfxEnd(win);
   const elapsed=Math.floor((Date.now()-gameStartMs)/1000);
   const mm=String(Math.floor(elapsed/60)).padStart(2,'0');
   const ss=String(elapsed%60).padStart(2,'0');
@@ -831,29 +781,9 @@ function showResult(win, reason){
   title.className='result-title '+(win?'win':'lose');
   document.getElementById('resultSub').textContent=reason||'';
   document.getElementById('resultStats').innerHTML=
-    '我的分數: '+sc+'　Lines: '+li+'　Level: '+lv+'<br>'+
-    '對手分數: '+opSc+'　Lines: '+opLi+'<br>'+
-    'Time: '+mm+':'+ss;
+    'Score: '+sc+'<br>Lines: '+li+'<br>Level: '+lv+'<br>Time: '+mm+':'+ss;
   document.getElementById('resultOverlay').classList.add('visible');
 }
-
-// ── Responsive scaling ──
-function fitGame(){
-  const app = document.getElementById('battleScreen');
-  if(app.classList.contains('hidden')) return;
-  app.style.transform = '';
-  requestAnimationFrame(()=>{
-    const w = app.offsetWidth, h = app.offsetHeight;
-    if(!w || !h) return;
-    const scale = Math.min(
-      window.innerWidth  / w,
-      window.innerHeight / h
-    ) * 0.97;
-    app.style.transformOrigin = 'top center';
-    app.style.transform = scale < 1 ? `scale(${scale.toFixed(3)})` : '';
-  });
-}
-window.addEventListener('resize', fitGame);
 </script>
 </body>
 </html>
