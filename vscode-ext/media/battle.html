@@ -140,6 +140,14 @@
 
   .hidden { display:none !important; }
 
+  /* ── Solo mode: hide multiplayer-only UI ── */
+  body.solo-mode .vs,
+  body.solo-mode .player-name.op,
+  body.solo-mode #roomLabel,
+  body.solo-mode #attackSection,
+  body.solo-mode #opponentCol,
+  body.solo-mode #myGarbageBar { display:none !important; }
+
   /* ── Result overlay ── */
   .result-overlay {
     position:fixed; inset:0; display:none;
@@ -196,6 +204,7 @@
   <div class="btn-row">
     <button class="btn btn-primary" onclick="joinRandom()">隨機配對</button>
     <button class="btn btn-secondary" onclick="showPrivate()">私人房間</button>
+    <button class="btn btn-secondary" onclick="startSolo()">單機練習</button>
   </div>
 
   <div id="privateSection" class="hidden">
@@ -218,7 +227,8 @@
     <div class="player-name me" id="myNameTag">ME</div>
     <div class="vs">VS</div>
     <div class="player-name op" id="opNameTag">???</div>
-    <span style="margin-left:12px">Room: <span class="room-id" id="roomIdTag">---</span></span>
+    <span id="roomLabel" style="margin-left:12px">Room: <span class="room-id" id="roomIdTag">---</span></span>
+    <span id="soloLabel" class="hidden" style="margin-left:12px;color:var(--accent);letter-spacing:2px">SOLO</span>
   </div>
 
   <div class="battle-area">
@@ -256,7 +266,7 @@
         <div class="stat-label">Level</div>
         <div class="stat-val" id="myLevel">1</div>
       </div>
-      <div style="width:100%;margin-top:8px;">
+      <div id="attackSection" style="width:100%;margin-top:8px;">
         <div class="attack-label">ATTACK</div>
         <div class="attack-bar"><div class="attack-fill" id="attackFill"></div></div>
       </div>
@@ -268,7 +278,7 @@
     </div>
 
     <!-- Opponent board -->
-    <div class="board-col">
+    <div class="board-col" id="opponentCol">
       <div style="text-align:center;margin-bottom:8px">
         <span style="font-size:9px;color:#888;letter-spacing:1px">OPPONENT</span>
       </div>
@@ -386,6 +396,7 @@ let gameActive = false;
 let pendingGarbage = 0;
 let gameStartMs = 0;
 let syncTimer = 0;
+let gameMode = 'multi'; // 'multi' | 'solo'
 
 // ═══════════════════════════════════════════
 //  NETWORK
@@ -471,13 +482,26 @@ function createRoom() {
   wsConnect(() => wsSend('join', { name: getMyName(), room_id: rid }));
 }
 
+function startSolo() {
+  gameMode = 'solo';
+  document.body.classList.add('solo-mode');
+  document.getElementById('soloLabel').classList.remove('hidden');
+  document.getElementById('lobby').classList.add('hidden');
+  document.getElementById('battleScreen').classList.remove('hidden');
+  document.getElementById('myNameTag').textContent = getMyName();
+  startBattle();
+}
+
 function backToLobby() {
   document.getElementById('resultOverlay').classList.remove('visible');
   hideReadyOverlay();
   document.getElementById('battleScreen').classList.add('hidden');
   document.getElementById('lobby').classList.remove('hidden');
   document.getElementById('statusText').classList.add('hidden');
+  document.body.classList.remove('solo-mode');
+  document.getElementById('soloLabel').classList.add('hidden');
   gameActive = false;
+  gameMode = 'multi';
   if (ws) ws.close();
 }
 
