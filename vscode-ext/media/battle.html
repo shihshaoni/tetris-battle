@@ -234,9 +234,11 @@
           <canvas id="myNext" width="60" height="130"></canvas>
         </div>
       </div>
-      <div class="board-frame me" style="position:relative">
+      <div style="position:relative">
         <div class="garbage-bar" id="myGarbageBar"></div>
-        <canvas id="myBoard" width="240" height="480"></canvas>
+        <div class="board-frame me">
+          <canvas id="myBoard" width="240" height="480"></canvas>
+        </div>
       </div>
     </div>
 
@@ -323,13 +325,74 @@ const SERVER_URL = '__SERVER_URL__';
 const DEFAULT_NAME = '__PLAYER_NAME__';
 document.getElementById('nameInput').value = DEFAULT_NAME;
 
+const COLS = 10;
+const ROWS = 20;
+const BLOCK_SIZE = 24;
+const OP_BLOCK_SIZE = 18;
+const SPAWN_X = 3;
+const SPAWN_Y = -2;
+const LOCK_DELAY_MS = 500;
+const MAX_LOCK_MOVES = 15;
+const SYNC_INTERVAL_MS = 200;
+const HEARTBEAT_INTERVAL_MS = 10000;
+const BOARD_BG = '#0d0d18';
+const GRID_LINE = '#1a1a2e';
+
+const COLORS = {
+  I: '#00e5ff', O: '#ffd600', T: '#d500f9',
+  S: '#00e676', Z: '#ff1744', J: '#2979ff', L: '#ff9100',
+  G: '#555555'
+};
+
+const SHAPES = {
+  I: [[0,0],[1,0],[2,0],[3,0]],
+  O: [[0,0],[1,0],[0,1],[1,1]],
+  T: [[0,0],[1,0],[2,0],[1,1]],
+  S: [[1,0],[2,0],[0,1],[1,1]],
+  Z: [[0,0],[1,0],[1,1],[2,1]],
+  J: [[0,0],[0,1],[1,1],[2,1]],
+  L: [[2,0],[0,1],[1,1],[2,1]]
+};
+
+const KICKS = [
+  [[0,0],[-1,0],[-1,-1],[0,2],[-1,2]],
+  [[0,0],[1,0],[1,1],[0,-2],[1,-2]],
+  [[0,0],[1,0],[1,-1],[0,2],[1,2]],
+  [[0,0],[-1,0],[-1,1],[0,-2],[-1,-2]]
+];
+
+// ═══════════════════════════════════════════
+//  CANVAS CONTEXTS
+// ═══════════════════════════════════════════
+const myCx = document.getElementById('myBoard').getContext('2d');
+const myHoldCx = document.getElementById('myHold').getContext('2d');
+const myNextCx = document.getElementById('myNext').getContext('2d');
+const opCx = document.getElementById('opBoard').getContext('2d');
+
+// ═══════════════════════════════════════════
+//  GAME STATE
+// ═══════════════════════════════════════════
+let grid;
+let currentPiece;
+let nextQueue;
+let heldPiece;
+let canHold;
+let score, lines, level;
+let dropInterval, dropTimer;
+let lockTimer, lockMoveCount;
+let lastFrameTime;
+let pieceBag = [];
+let gameActive = false;
+let pendingGarbage = 0;
+let gameStartMs = 0;
+let syncTimer = 0;
+
 // ═══════════════════════════════════════════
 //  NETWORK
 // ═══════════════════════════════════════════
 let ws = null;
 let connected = false;
 let heartbeatInterval = null;
-let pendingJoinData = null;
 
 function wsConnect(onOpen) {
   if (ws && ws.readyState === WebSocket.OPEN) {
@@ -341,13 +404,12 @@ function wsConnect(onOpen) {
 
   ws.onopen = () => {
     connected = true;
-    // Send heartbeat every 10s to keep connection alive
     clearInterval(heartbeatInterval);
     heartbeatInterval = setInterval(() => {
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'ping' }));
       }
-    }, 10000);
+    }, HEARTBEAT_INTERVAL_MS);
     if (onOpen) onOpen();
   };
 
@@ -384,29 +446,29 @@ function showPrivate() {
   document.getElementById('privateSection').classList.toggle('hidden');
 }
 
+function getMyName() {
+  return document.getElementById('nameInput').value.trim() || DEFAULT_NAME;
+}
+
 function joinRandom() {
-  const name = document.getElementById('nameInput').value.trim() || DEFAULT_NAME;
   setStatus('正在搜尋對手...');
-  wsConnect(() => wsSend('join', { name }));
+  wsConnect(() => wsSend('join', { name: getMyName() }));
 }
 
 function joinRoom() {
-  const name = document.getElementById('nameInput').value.trim() || DEFAULT_NAME;
   const roomId = document.getElementById('roomInput').value.trim().toUpperCase();
   if (!roomId) return;
   setStatus('加入房間 ' + roomId + '...');
-  wsConnect(() => wsSend('join', { name, room_id: roomId }));
+  wsConnect(() => wsSend('join', { name: getMyName(), room_id: roomId }));
 }
 
 function createRoom() {
-  const name = document.getElementById('nameInput').value.trim() || DEFAULT_NAME;
-  // Generate a room code client-side for display
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let rid = '';
-  for (let i = 0; i < 6; i++) rid += chars[Math.floor(Math.random()*chars.length)];
+  for (let i = 0; i < 6; i++) rid += chars[Math.floor(Math.random() * chars.length)];
   document.getElementById('roomInput').value = rid;
-  setStatus('房間 ' + rid + ' 已建立，等待對手加入...');
-  wsConnect(() => wsSend('join', { name, room_id: rid }));
+  setStatus('房間 ' + rid + ' 已建立,等待對手加入...');
+  wsConnect(() => wsSend('join', { name: getMyName(), room_id: rid }));
 }
 
 function backToLobby() {
@@ -438,17 +500,13 @@ function hideReadyOverlay() {
 }
 
 function setMyReadyState(ready) {
-  const slot = document.getElementById('myReadySlot');
-  const state = document.getElementById('myReadyState');
-  slot.classList.toggle('ready', ready);
-  state.textContent = ready ? 'READY' : 'NOT READY';
+  document.getElementById('myReadySlot').classList.toggle('ready', ready);
+  document.getElementById('myReadyState').textContent = ready ? 'READY' : 'NOT READY';
 }
 
 function setOpReadyState(ready) {
-  const slot = document.getElementById('opReadySlot');
-  const state = document.getElementById('opReadyState');
-  slot.classList.toggle('ready', ready);
-  state.textContent = ready ? 'READY' : 'NOT READY';
+  document.getElementById('opReadySlot').classList.toggle('ready', ready);
+  document.getElementById('opReadyState').textContent = ready ? 'READY' : 'NOT READY';
 }
 
 function sendReady() {
@@ -466,18 +524,17 @@ function sendReady() {
 function handleServerMsg(msg) {
   switch (msg.type) {
     case 'waiting':
-      // Already showing status
       break;
-    case 'match_found':
-      const mf = msg.data;
-      const myName = document.getElementById('nameInput').value.trim() || DEFAULT_NAME;
+    case 'match_found': {
+      const myName = getMyName();
       document.getElementById('lobby').classList.add('hidden');
       document.getElementById('battleScreen').classList.remove('hidden');
       document.getElementById('myNameTag').textContent = myName;
-      document.getElementById('opNameTag').textContent = mf.opponent;
-      document.getElementById('roomIdTag').textContent = mf.room_id;
-      showReadyOverlay(myName, mf.opponent);
+      document.getElementById('opNameTag').textContent = msg.data.opponent;
+      document.getElementById('roomIdTag').textContent = msg.data.room_id;
+      showReadyOverlay(myName, msg.data.opponent);
       break;
+    }
     case 'opponent_ready':
       setOpReadyState(true);
       break;
@@ -486,7 +543,7 @@ function handleServerMsg(msg) {
       startBattle();
       break;
     case 'opponent_board':
-      updateOpponentBoard(msg.data);
+      drawOpponentBoard(msg.data);
       break;
     case 'opponent_attack':
       receiveGarbage(msg.data.lines);
@@ -507,108 +564,180 @@ function handleServerMsg(msg) {
 }
 
 // ═══════════════════════════════════════════
-//  TETRIS ENGINE (my board)
+//  PIECE / BAG
 // ═══════════════════════════════════════════
-const COLS=10, ROWS=20, SZ=24, OP_SZ=18;
-const myCanvas = document.getElementById('myBoard');
-const myCx = myCanvas.getContext('2d');
-const myHoldCx = document.getElementById('myHold').getContext('2d');
-const myNextCx = document.getElementById('myNext').getContext('2d');
-const opCanvas = document.getElementById('opBoard');
-const opCx = opCanvas.getContext('2d');
+function shuffleBag() {
+  const types = Object.keys(SHAPES);
+  for (let i = types.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [types[i], types[j]] = [types[j], types[i]];
+  }
+  return types;
+}
 
-const CL = {I:'#00e5ff',O:'#ffd600',T:'#d500f9',S:'#00e676',Z:'#ff1744',J:'#2979ff',L:'#ff9100'};
-const SH = {
-  I:[[0,0],[1,0],[2,0],[3,0]], O:[[0,0],[1,0],[0,1],[1,1]],
-  T:[[0,0],[1,0],[2,0],[1,1]], S:[[1,0],[2,0],[0,1],[1,1]],
-  Z:[[0,0],[1,0],[1,1],[2,1]], J:[[0,0],[0,1],[1,1],[2,1]],
-  L:[[2,0],[0,1],[1,1],[2,1]]
-};
-const KK=[[[0,0],[-1,0],[-1,-1],[0,2],[-1,2]],[[0,0],[1,0],[1,1],[0,-2],[1,-2]],[[0,0],[1,0],[1,-1],[0,2],[1,2]],[[0,0],[-1,0],[-1,1],[0,-2],[-1,-2]]];
+function nextFromBag() {
+  if (pieceBag.length === 0) pieceBag = shuffleBag();
+  return pieceBag.pop();
+}
 
-let grid, pc, nq, hp, ch, sc, li, lv;
-let di, dt2, lt, lkT, lkM, bag=[];
-let gameActive = false;
-let pendingGarbage = 0;
-let gameStartMs = 0;
-let syncTimer = 0;
+function createPiece(type) {
+  return {
+    type,
+    cells: SHAPES[type].map(c => [...c]),
+    x: SPAWN_X,
+    y: SPAWN_Y,
+    rot: 0
+  };
+}
 
-function rb(){const k=Object.keys(SH);for(let i=k.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[k[i],k[j]]=[k[j],k[i]];}return k;}
-function np2(){if(!bag.length)bag=rb();return bag.pop();}
-function cp(t){return{type:t,cells:SH[t].map(c=>[...c]),x:3,y:-2,rot:0};}
-function rc(cells,d){let mx=0,my=0;cells.forEach(([x,y])=>{mx=Math.max(mx,x);my=Math.max(my,y);});const s=Math.max(mx,my)+1;return cells.map(([x,y])=>d===1?[s-1-y,x]:[y,s-1-x]);}
-function col(cells,ox,oy){return cells.some(([cx,cy])=>{const nx=cx+ox,ny=cy+oy;if(nx<0||nx>=COLS||ny>=ROWS)return true;if(ny<0)return false;return grid[ny][nx]!==null;});}
+function rotateCells(cells, dir) {
+  let maxX = 0, maxY = 0;
+  cells.forEach(([x, y]) => { maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); });
+  const size = Math.max(maxX, maxY) + 1;
+  return cells.map(([x, y]) => dir === 1 ? [size - 1 - y, x] : [y, size - 1 - x]);
+}
 
-function tryR(d){
-  const nc=rc(pc.cells,d);const tr=(pc.rot+d+4)%4;
-  const tests=KK[d===1?pc.rot:tr];
-  for(const[kx,ky]of tests){
-    const dx=d===1?kx:-kx,dy=d===1?-ky:ky;
-    if(!col(nc,pc.x+dx,pc.y+dy)){pc.cells=nc;pc.x+=dx;pc.y+=dy;pc.rot=tr;lkT=0;return true;}
+// Cells above the playfield (ny<0) are treated as non-colliding here;
+// top-out is detected separately in lockPiece() / spawnNext() / applyGarbage().
+function collides(cells, offsetX, offsetY) {
+  return cells.some(([cx, cy]) => {
+    const nx = cx + offsetX;
+    const ny = cy + offsetY;
+    if (nx < 0 || nx >= COLS || ny >= ROWS) return true;
+    if (ny < 0) return false;
+    return grid[ny][nx] !== null;
+  });
+}
+
+function tryRotate(dir) {
+  const rotated = rotateCells(currentPiece.cells, dir);
+  const targetRot = (currentPiece.rot + dir + 4) % 4;
+  const tests = KICKS[dir === 1 ? currentPiece.rot : targetRot];
+  for (const [kx, ky] of tests) {
+    const dx = dir === 1 ? kx : -kx;
+    const dy = dir === 1 ? -ky : ky;
+    if (!collides(rotated, currentPiece.x + dx, currentPiece.y + dy)) {
+      currentPiece.cells = rotated;
+      currentPiece.x += dx;
+      currentPiece.y += dy;
+      currentPiece.rot = targetRot;
+      lockTimer = 0;
+      return true;
+    }
   }
   return false;
 }
 
-function gy2(){let y=pc.y;while(!col(pc.cells,pc.x,y+1))y++;return y;}
+function getGhostY() {
+  let y = currentPiece.y;
+  while (!collides(currentPiece.cells, currentPiece.x, y + 1)) y++;
+  return y;
+}
 
-function lockPc(){
-  pc.cells.forEach(([cx,cy])=>{
-    const nx=cx+pc.x,ny=cy+pc.y;
-    if(ny>=0&&ny<ROWS&&nx>=0&&nx<COLS)grid[ny][nx]=pc.type;
+// Lock-out: piece locks with at least one cell above the visible playfield.
+function isLockOut(piece) {
+  return piece.cells.some(([cx, cy]) => cy + piece.y < 0);
+}
+
+// Block-out: freshly spawned piece directly overlaps a filled cell in the playfield.
+function isBlockOut(piece) {
+  return piece.cells.some(([cx, cy]) => {
+    const nx = cx + piece.x;
+    const ny = cy + piece.y;
+    if (ny < 0 || ny >= ROWS || nx < 0 || nx >= COLS) return false;
+    return grid[ny][nx] !== null;
   });
-  clr();
-  // Apply pending garbage AFTER clearing
-  applyGarbage();
-  spn();
 }
 
-function clr(){
-  let c=0;
-  for(let y=ROWS-1;y>=0;y--){
-    if(grid[y].every(v=>v!==null)){grid.splice(y,1);grid.unshift(new Array(COLS).fill(null));c++;y++;}
+// ═══════════════════════════════════════════
+//  GAME ACTIONS
+// ═══════════════════════════════════════════
+function lockPiece() {
+  if (isLockOut(currentPiece)) {
+    triggerTopOut('方塊堆頂了！');
+    return;
   }
-  if(c>0){
-    const pts=[0,100,300,500,800][c]*lv;
-    sc+=pts; li+=c;
-    lv=Math.floor(li/10)+1;
-    di=Math.max(50,1000-(lv-1)*80);
-
-    // Send attack! Garbage lines = cleared - 1 (single=0, double=1, triple=2, tetris=3)
-    const attackLines = c - 1;
-    if(attackLines > 0){
-      // If we have pending garbage, cancel some first
-      if(pendingGarbage > 0){
-        const cancel = Math.min(pendingGarbage, attackLines);
-        pendingGarbage -= cancel;
-        const remaining = attackLines - cancel;
-        if(remaining > 0) wsSend('attack', {lines: remaining});
-      } else {
-        wsSend('attack', {lines: attackLines});
-      }
-      flashAttack(attackLines);
+  currentPiece.cells.forEach(([cx, cy]) => {
+    const nx = cx + currentPiece.x;
+    const ny = cy + currentPiece.y;
+    if (ny >= 0 && ny < ROWS && nx >= 0 && nx < COLS) {
+      grid[ny][nx] = currentPiece.type;
     }
-    updateGarbageBar();
-    updateMyUI();
+  });
+  clearLines();
+  applyGarbage();
+  if (!gameActive) return;
+  spawnNext();
+}
+
+function clearLines() {
+  let cleared = 0;
+  for (let y = ROWS - 1; y >= 0; y--) {
+    if (grid[y].every(v => v !== null)) {
+      grid.splice(y, 1);
+      grid.unshift(new Array(COLS).fill(null));
+      cleared++;
+      y++;
+    }
   }
-}
+  if (cleared === 0) return;
 
-function spn(){
-  pc=cp(nq.shift());nq.push(np2());ch=true;lkT=0;lkM=0;
-  if(col(pc.cells,pc.x,pc.y)){
-    gameActive=false;
-    wsSend('game_over',{});
-    showResult(false,'方塊堆滿了！');
+  score += [0, 100, 300, 500, 800][cleared] * level;
+  lines += cleared;
+  level = Math.floor(lines / 10) + 1;
+  dropInterval = Math.max(50, 1000 - (level - 1) * 80);
+
+  // Attack: garbage lines = cleared - 1 (single=0, double=1, triple=2, tetris=3)
+  const attackLines = cleared - 1;
+  if (attackLines > 0) {
+    if (pendingGarbage > 0) {
+      const canceled = Math.min(pendingGarbage, attackLines);
+      pendingGarbage -= canceled;
+      const remaining = attackLines - canceled;
+      if (remaining > 0) wsSend('attack', { lines: remaining });
+    } else {
+      wsSend('attack', { lines: attackLines });
+    }
+    flashAttack(attackLines);
   }
-  drawMyNext();drawMyHold();
+  updateGarbageBar();
+  updateMyUI();
 }
 
-function holdSw(){
-  if(!ch)return;ch=false;const t=pc.type;
-  if(hp){pc=cp(hp);}else{pc=cp(nq.shift());nq.push(np2());}
-  hp=t;lkT=0;lkM=0;drawMyHold();drawMyNext();
+function spawnNext() {
+  currentPiece = createPiece(nextQueue.shift());
+  nextQueue.push(nextFromBag());
+  canHold = true;
+  lockTimer = 0;
+  lockMoveCount = 0;
+  if (isBlockOut(currentPiece)) {
+    triggerTopOut('方塊堆頂了！');
+    return;
+  }
+  drawNext();
+  drawHold();
 }
 
-// ── Garbage lines ──
+function holdSwap() {
+  if (!canHold) return;
+  canHold = false;
+  const currentType = currentPiece.type;
+  if (heldPiece) {
+    currentPiece = createPiece(heldPiece);
+  } else {
+    currentPiece = createPiece(nextQueue.shift());
+    nextQueue.push(nextFromBag());
+  }
+  heldPiece = currentType;
+  lockTimer = 0;
+  lockMoveCount = 0;
+  drawHold();
+  drawNext();
+}
+
+// ═══════════════════════════════════════════
+//  GARBAGE
+// ═══════════════════════════════════════════
 function receiveGarbage(n) {
   pendingGarbage += n;
   updateGarbageBar();
@@ -617,13 +746,20 @@ function receiveGarbage(n) {
 function applyGarbage() {
   if (pendingGarbage <= 0) return;
   const n = pendingGarbage;
-  pendingGarbage = 0;
-  // Add n garbage lines at bottom with one random gap
+
+  // Top-out if existing blocks would be pushed above the playfield.
   for (let i = 0; i < n; i++) {
-    grid.shift(); // remove top row
-    const row = new Array(COLS).fill('G'); // 'G' = garbage
-    const gap = Math.floor(Math.random() * COLS);
-    row[gap] = null;
+    if (grid[i].some(v => v !== null)) {
+      triggerTopOut('被對手的垃圾行淹沒了！');
+      return;
+    }
+  }
+
+  pendingGarbage = 0;
+  for (let i = 0; i < n; i++) {
+    grid.shift();
+    const row = new Array(COLS).fill('G');
+    row[Math.floor(Math.random() * COLS)] = null;
     grid.push(row);
   }
   updateGarbageBar();
@@ -645,144 +781,276 @@ function flashAttack(n) {
   setTimeout(() => { fill.style.width = '0%'; }, 600);
 }
 
-// ── Drawing ──
-function dc2(c,x,y,t,sz,a=1){
-  c.globalAlpha=a;c.fillStyle=t==='G'?'#555':CL[t];
-  c.fillRect(x*sz+1,y*sz+1,sz-2,sz-2);
-  c.fillStyle='rgba(255,255,255,0.2)';c.fillRect(x*sz+1,y*sz+1,sz-2,2);
-  c.fillStyle='rgba(0,0,0,0.2)';c.fillRect(x*sz+1,y*sz+sz-3,sz-2,2);
-  c.globalAlpha=1;
+function triggerTopOut(reason) {
+  if (!gameActive) return;
+  gameActive = false;
+  wsSend('game_over', {});
+  showResult(false, reason);
 }
 
-function drawMyBoard(){
-  myCx.fillStyle='#0d0d18';myCx.fillRect(0,0,COLS*SZ,ROWS*SZ);
-  myCx.strokeStyle='#1a1a2e';myCx.lineWidth=0.3;
-  for(let x=0;x<=COLS;x++){myCx.beginPath();myCx.moveTo(x*SZ,0);myCx.lineTo(x*SZ,ROWS*SZ);myCx.stroke();}
-  for(let y=0;y<=ROWS;y++){myCx.beginPath();myCx.moveTo(0,y*SZ);myCx.lineTo(COLS*SZ,y*SZ);myCx.stroke();}
-  for(let y=0;y<ROWS;y++)for(let x=0;x<COLS;x++)if(grid[y][x])dc2(myCx,x,y,grid[y][x],SZ);
+// ═══════════════════════════════════════════
+//  DRAWING
+// ═══════════════════════════════════════════
+function drawBlock(ctx, x, y, type, size, alpha = 1) {
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = COLORS[type] || '#555';
+  ctx.fillRect(x * size + 1, y * size + 1, size - 2, size - 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.2)';
+  ctx.fillRect(x * size + 1, y * size + 1, size - 2, 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  ctx.fillRect(x * size + 1, y * size + size - 3, size - 2, 2);
+  ctx.globalAlpha = 1;
+}
 
-  if(pc&&gameActive){
-    const g=gy2();
-    pc.cells.forEach(([cx,cy])=>{const nx=cx+pc.x,ny=cy+g;if(ny>=0){myCx.fillStyle='rgba(255,255,255,0.06)';myCx.fillRect(nx*SZ+1,ny*SZ+1,SZ-2,SZ-2);}});
-    pc.cells.forEach(([cx,cy])=>{const nx=cx+pc.x,ny=cy+pc.y;if(ny>=0)dc2(myCx,nx,ny,pc.type,SZ);});
+function drawGrid(ctx, size) {
+  ctx.fillStyle = BOARD_BG;
+  ctx.fillRect(0, 0, COLS * size, ROWS * size);
+  ctx.strokeStyle = GRID_LINE;
+  ctx.lineWidth = 0.3;
+  for (let x = 0; x <= COLS; x++) {
+    ctx.beginPath();
+    ctx.moveTo(x * size, 0);
+    ctx.lineTo(x * size, ROWS * size);
+    ctx.stroke();
+  }
+  for (let y = 0; y <= ROWS; y++) {
+    ctx.beginPath();
+    ctx.moveTo(0, y * size);
+    ctx.lineTo(COLS * size, y * size);
+    ctx.stroke();
   }
 }
 
-function dm2(c,t,ox,oy,s){
-  const cs=SH[t];let mnx=9,mxx=0,mny=9,mxy=0;
-  cs.forEach(([x,y])=>{mnx=Math.min(mnx,x);mxx=Math.max(mxx,x);mny=Math.min(mny,y);mxy=Math.max(mxy,y);});
-  const w=mxx-mnx+1,h=mxy-mny+1;const sx=ox+(4-w)*s/2-mnx*s,sy=oy+(2-h)*s/2-mny*s;
-  cs.forEach(([cx,cy])=>{c.fillStyle=CL[t];c.fillRect(sx+cx*s+1,sy+cy*s+1,s-2,s-2);});
-}
-
-function drawMyHold(){myHoldCx.clearRect(0,0,60,48);if(hp)dm2(myHoldCx,hp,2,8,11);}
-function drawMyNext(){myNextCx.clearRect(0,0,60,130);nq.forEach((t,i)=>dm2(myNextCx,t,2,4+i*32,10));}
-
-function updateMyUI(){
-  document.getElementById('myScore').textContent=sc;
-  document.getElementById('myLines').textContent=li;
-  document.getElementById('myLevel').textContent=lv;
-}
-
-// ── Opponent board ──
-function updateOpponentBoard(data){
-  if(!data)return;
-  opCx.fillStyle='#0d0d18';opCx.fillRect(0,0,COLS*OP_SZ,ROWS*OP_SZ);
-  opCx.strokeStyle='#1a1a2e';opCx.lineWidth=0.2;
-  for(let x=0;x<=COLS;x++){opCx.beginPath();opCx.moveTo(x*OP_SZ,0);opCx.lineTo(x*OP_SZ,ROWS*OP_SZ);opCx.stroke();}
-  for(let y=0;y<=ROWS;y++){opCx.beginPath();opCx.moveTo(0,y*OP_SZ);opCx.lineTo(COLS*OP_SZ,y*OP_SZ);opCx.stroke();}
-
-  if(data.grid){
-    for(let y=0;y<ROWS;y++)for(let x=0;x<COLS;x++){
-      const v=data.grid[y]?data.grid[y][x]:null;
-      if(v)dc2(opCx,x,y,v,OP_SZ);
+function drawGridContents(ctx, board, size) {
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLS; x++) {
+      const v = board[y] ? board[y][x] : null;
+      if (v) drawBlock(ctx, x, y, v, size);
     }
   }
-  document.getElementById('opScore').textContent=data.score||0;
-  document.getElementById('opLines').textContent=data.lines||0;
 }
 
-// ── Sync my board state to opponent ──
-function syncBoard(){
-  wsSend('board_state',{grid,score:sc,lines:li,level:lv});
+function drawMyBoard() {
+  drawGrid(myCx, BLOCK_SIZE);
+  drawGridContents(myCx, grid, BLOCK_SIZE);
+
+  if (!currentPiece || !gameActive) return;
+
+  const ghostY = getGhostY();
+  currentPiece.cells.forEach(([cx, cy]) => {
+    const nx = cx + currentPiece.x;
+    const ny = cy + ghostY;
+    if (ny < 0) return;
+    myCx.fillStyle = 'rgba(255,255,255,0.06)';
+    myCx.fillRect(nx * BLOCK_SIZE + 1, ny * BLOCK_SIZE + 1, BLOCK_SIZE - 2, BLOCK_SIZE - 2);
+  });
+  currentPiece.cells.forEach(([cx, cy]) => {
+    const nx = cx + currentPiece.x;
+    const ny = cy + currentPiece.y;
+    if (ny < 0) return;
+    drawBlock(myCx, nx, ny, currentPiece.type, BLOCK_SIZE);
+  });
 }
 
-// ── Input ──
-function handleKey(e){
-  if(!gameActive)return;
-  switch(e.key){
-    case'ArrowLeft':if(!col(pc.cells,pc.x-1,pc.y)){pc.x--;lkT=0;}break;
-    case'ArrowRight':if(!col(pc.cells,pc.x+1,pc.y)){pc.x++;lkT=0;}break;
-    case'ArrowDown':if(!col(pc.cells,pc.x,pc.y+1)){pc.y++;sc+=1;dt2=0;}break;
-    case'ArrowUp':case'x':case'X':tryR(1);break;
-    case'z':case'Z':tryR(-1);break;
-    case' ':let d=0;while(!col(pc.cells,pc.x,pc.y+1)){pc.y++;d++;}sc+=d*2;lockPc();break;
-    case'c':case'C':holdSw();break;
-    default:return;
+function drawOpponentBoard(data) {
+  if (!data) return;
+  drawGrid(opCx, OP_BLOCK_SIZE);
+  if (data.grid) drawGridContents(opCx, data.grid, OP_BLOCK_SIZE);
+  document.getElementById('opScore').textContent = data.score || 0;
+  document.getElementById('opLines').textContent = data.lines || 0;
+}
+
+function drawMini(ctx, type, offsetX, offsetY, size) {
+  const cells = SHAPES[type];
+  let minX = 9, maxX = 0, minY = 9, maxY = 0;
+  cells.forEach(([x, y]) => {
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+  });
+  const w = maxX - minX + 1;
+  const h = maxY - minY + 1;
+  const sx = offsetX + (4 - w) * size / 2 - minX * size;
+  const sy = offsetY + (2 - h) * size / 2 - minY * size;
+  ctx.fillStyle = COLORS[type];
+  cells.forEach(([cx, cy]) => {
+    ctx.fillRect(sx + cx * size + 1, sy + cy * size + 1, size - 2, size - 2);
+  });
+}
+
+function drawHold() {
+  myHoldCx.clearRect(0, 0, 60, 48);
+  if (heldPiece) drawMini(myHoldCx, heldPiece, 2, 8, 11);
+}
+
+function drawNext() {
+  myNextCx.clearRect(0, 0, 60, 130);
+  nextQueue.forEach((t, i) => drawMini(myNextCx, t, 2, 4 + i * 32, 10));
+}
+
+function updateMyUI() {
+  document.getElementById('myScore').textContent = score;
+  document.getElementById('myLines').textContent = lines;
+  document.getElementById('myLevel').textContent = level;
+}
+
+function syncBoard() {
+  wsSend('board_state', { grid, score, lines, level });
+}
+
+// ═══════════════════════════════════════════
+//  INPUT
+// ═══════════════════════════════════════════
+function handleKey(e) {
+  if (!gameActive) return;
+  switch (e.key) {
+    case 'ArrowLeft':
+      if (!collides(currentPiece.cells, currentPiece.x - 1, currentPiece.y)) {
+        currentPiece.x--;
+        lockTimer = 0;
+      }
+      break;
+    case 'ArrowRight':
+      if (!collides(currentPiece.cells, currentPiece.x + 1, currentPiece.y)) {
+        currentPiece.x++;
+        lockTimer = 0;
+      }
+      break;
+    case 'ArrowDown':
+      if (!collides(currentPiece.cells, currentPiece.x, currentPiece.y + 1)) {
+        currentPiece.y++;
+        score += 1;
+        dropTimer = 0;
+      }
+      break;
+    case 'ArrowUp':
+    case 'x':
+    case 'X':
+      tryRotate(1);
+      break;
+    case 'z':
+    case 'Z':
+      tryRotate(-1);
+      break;
+    case ' ': {
+      let distance = 0;
+      while (!collides(currentPiece.cells, currentPiece.x, currentPiece.y + 1)) {
+        currentPiece.y++;
+        distance++;
+      }
+      score += distance * 2;
+      lockPiece();
+      break;
+    }
+    case 'c':
+    case 'C':
+      holdSwap();
+      break;
+    default:
+      return;
   }
-  e.preventDefault();updateMyUI();
+  e.preventDefault();
+  updateMyUI();
 }
-document.addEventListener('keydown',handleKey);
+document.addEventListener('keydown', handleKey);
 
-// ── Game loop ──
-function gameLoop(now){
-  if(!gameActive)return;
-  const d=now-lt;lt=now;dt2+=d;
-  if(dt2>=di){dt2=0;if(!col(pc.cells,pc.x,pc.y+1))pc.y++;}
-  if(col(pc.cells,pc.x,pc.y+1)){lkT+=d;if(lkT>=500||lkM>=15){lockPc();lkT=0;}}else{lkT=0;}
+// ═══════════════════════════════════════════
+//  GAME LOOP
+// ═══════════════════════════════════════════
+function gameLoop(now) {
+  if (!gameActive) return;
 
-  // Sync board to opponent every ~200ms
-  syncTimer+=d;
-  if(syncTimer>=200){syncTimer=0;syncBoard();}
+  const dt = now - lastFrameTime;
+  lastFrameTime = now;
+  dropTimer += dt;
 
-  // Update timer
-  const elapsed=Math.floor((Date.now()-gameStartMs)/1000);
-  const mm=String(Math.floor(elapsed/60)).padStart(2,'0');
-  const ss=String(elapsed%60).padStart(2,'0');
-  document.getElementById('gameTime').textContent=mm+':'+ss;
+  if (dropTimer >= dropInterval) {
+    dropTimer = 0;
+    if (!collides(currentPiece.cells, currentPiece.x, currentPiece.y + 1)) {
+      currentPiece.y++;
+    }
+  }
+
+  if (collides(currentPiece.cells, currentPiece.x, currentPiece.y + 1)) {
+    lockTimer += dt;
+    if (lockTimer >= LOCK_DELAY_MS || lockMoveCount >= MAX_LOCK_MOVES) {
+      lockPiece();
+      if (!gameActive) return;
+      lockTimer = 0;
+    }
+  } else {
+    lockTimer = 0;
+  }
+
+  syncTimer += dt;
+  if (syncTimer >= SYNC_INTERVAL_MS) {
+    syncTimer = 0;
+    syncBoard();
+  }
+
+  const elapsed = Math.floor((Date.now() - gameStartMs) / 1000);
+  const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
+  const ss = String(elapsed % 60).padStart(2, '0');
+  document.getElementById('gameTime').textContent = mm + ':' + ss;
 
   drawMyBoard();
   requestAnimationFrame(gameLoop);
 }
 
-function startBattle(){
-  grid=Array.from({length:ROWS},()=>new Array(COLS).fill(null));
-  bag=[];nq=[np2(),np2(),np2(),np2()];hp=null;ch=true;
-  sc=0;li=0;lv=1;di=1000;dt2=0;lkT=0;lkM=0;
-  pendingGarbage=0;syncTimer=0;
-  gameStartMs=Date.now();
-  gameActive=true;lt=performance.now();
+function startBattle() {
+  grid = Array.from({ length: ROWS }, () => new Array(COLS).fill(null));
+  pieceBag = [];
+  nextQueue = [nextFromBag(), nextFromBag(), nextFromBag(), nextFromBag()];
+  heldPiece = null;
+  canHold = true;
+  score = 0;
+  lines = 0;
+  level = 1;
+  dropInterval = 1000;
+  dropTimer = 0;
+  lockTimer = 0;
+  lockMoveCount = 0;
+  pendingGarbage = 0;
+  syncTimer = 0;
+  gameStartMs = Date.now();
+  gameActive = true;
+  lastFrameTime = performance.now();
 
-  pc=cp(nq.shift());nq.push(np2());
-  updateMyUI();drawMyHold();drawMyNext();drawMyBoard();
-  // Clear opponent board
-  opCx.fillStyle='#0d0d18';opCx.fillRect(0,0,COLS*OP_SZ,ROWS*OP_SZ);
+  currentPiece = createPiece(nextQueue.shift());
+  nextQueue.push(nextFromBag());
+
+  updateMyUI();
+  drawHold();
+  drawNext();
+  drawMyBoard();
+  drawGrid(opCx, OP_BLOCK_SIZE);
   updateGarbageBar();
 
   document.body.focus();
   requestAnimationFrame(gameLoop);
 }
 
-function surrenderGame(){
-  if(!gameActive)return;
-  gameActive=false;
-  wsSend('game_over',{});
-  showResult(false,'你投降了');
+function surrenderGame() {
+  triggerTopOut('你投降了');
 }
 
-function showResult(win, reason){
-  gameActive=false;
-  const elapsed=Math.floor((Date.now()-gameStartMs)/1000);
-  const mm=String(Math.floor(elapsed/60)).padStart(2,'0');
-  const ss=String(elapsed%60).padStart(2,'0');
+function showResult(win, reason) {
+  const overlay = document.getElementById('resultOverlay');
+  if (overlay.classList.contains('visible')) return;
 
-  const title=document.getElementById('resultTitle');
-  title.textContent=win?'YOU WIN!':'YOU LOSE';
-  title.className='result-title '+(win?'win':'lose');
-  document.getElementById('resultSub').textContent=reason||'';
-  document.getElementById('resultStats').innerHTML=
-    'Score: '+sc+'<br>Lines: '+li+'<br>Level: '+lv+'<br>Time: '+mm+':'+ss;
-  document.getElementById('resultOverlay').classList.add('visible');
+  gameActive = false;
+  const elapsed = Math.floor((Date.now() - gameStartMs) / 1000);
+  const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
+  const ss = String(elapsed % 60).padStart(2, '0');
+
+  const title = document.getElementById('resultTitle');
+  title.textContent = win ? 'YOU WIN!' : 'YOU LOSE';
+  title.className = 'result-title ' + (win ? 'win' : 'lose');
+  document.getElementById('resultSub').textContent = reason || '';
+  document.getElementById('resultStats').innerHTML =
+    'Score: ' + score + '<br>Lines: ' + lines + '<br>Level: ' + level + '<br>Time: ' + mm + ':' + ss;
+  overlay.classList.add('visible');
 }
 </script>
 </body>
